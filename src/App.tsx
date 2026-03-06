@@ -162,91 +162,114 @@ export default function App() {
 
             <Separator size="4" />
 
-            <Box>
-              <Text as="label" className="field-label" htmlFor="shortcut">
-                ショートカットキー
-              </Text>
-              <TextField.Root
-                id="shortcut"
-                value={form.shortcut}
-                readOnly
-                onFocus={() => {
-                  setIsCapturingShortcut(true);
-                  setShortcutHint("待機中: 押したキーの組み合わせを登録します（Escでキャンセル）。");
-                }}
-                onBlur={() => setIsCapturingShortcut(false)}
-                onKeyDown={handleShortcutKeyDown}
-                placeholder="クリックしてからショートカットを押す"
-              />
-              <Text size="1" color={isCapturingShortcut ? "cyan" : "gray"} mt="1">
-                {shortcutHint || "この欄をクリック後にキーを押すと自動登録されます。Backspace でクリアできます。"}
-              </Text>
-            </Box>
+            <div className="settings-grid">
+              <Flex className="settings-column" direction="column" gap="4">
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="shortcut">
+                    ショートカットキー
+                  </Text>
+                  <TextField.Root
+                    id="shortcut"
+                    value={form.shortcut}
+                    readOnly
+                    onFocus={() => {
+                      setIsCapturingShortcut(true);
+                      setShortcutHint("待機中: 押したキーの組み合わせを登録します（Escでキャンセル）。");
+                    }}
+                    onBlur={() => setIsCapturingShortcut(false)}
+                    onKeyDown={handleShortcutKeyDown}
+                    placeholder="クリックしてからショートカットを押す"
+                  />
+                  <Text size="1" color={isCapturingShortcut ? "cyan" : "gray"} mt="1">
+                    {shortcutHint || "この欄をクリック後にキーを押すと自動登録されます。Backspace でクリアできます。"}
+                  </Text>
+                </Box>
 
-            <Box>
-              <Text as="label" className="field-label" htmlFor="endpoint">
-                Microsoft Foundry エンドポイント
-              </Text>
-              <TextField.Root
-                id="endpoint"
-                value={form.endpoint}
-                onChange={(e) => handleChange("endpoint", e.target.value)}
-                placeholder="https://your-resource.services.ai.azure.com"
-              />
-            </Box>
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="endpoint">
+                    Microsoft Foundry エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="endpoint"
+                    value={form.endpoint}
+                    onChange={(e) => handleChange("endpoint", e.target.value)}
+                    placeholder="https://your-resource.services.ai.azure.com"
+                  />
+                </Box>
 
-            <Box>
-              <Text as="label" className="field-label" htmlFor="apiKey">
-                API Key
-              </Text>
-              <TextField.Root
-                id="apiKey"
-                type="password"
-                value={form.apiKey}
-                onChange={(e) => handleChange("apiKey", e.target.value)}
-                placeholder="••••••••••••••••••••••••"
-              />
-            </Box>
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="apiKey">
+                    API Key
+                  </Text>
+                  <TextField.Root
+                    id="apiKey"
+                    type="password"
+                    value={form.apiKey}
+                    onChange={(e) => handleChange("apiKey", e.target.value)}
+                    placeholder="••••••••••••••••••••••••"
+                  />
+                </Box>
 
-            <Flex gap="4">
-              <Box className="field-half">
-                <Text as="label" className="field-label" htmlFor="transcriptionModel">
-                  文字起こしモデル
+                <Flex gap="4">
+                  <Box className="field-half">
+                    <Text as="label" className="field-label" htmlFor="transcriptionModel">
+                      文字起こしモデル
+                    </Text>
+                    <TextField.Root
+                      id="transcriptionModel"
+                      value={form.transcriptionModel}
+                      onChange={(e) => handleChange("transcriptionModel", e.target.value)}
+                      placeholder="gpt-4o-transcribe"
+                    />
+                  </Box>
+                  <Box className="field-half">
+                    <Text as="label" className="field-label" htmlFor="postprocessModel">
+                      後処理モデル
+                    </Text>
+                    <TextField.Root
+                      id="postprocessModel"
+                      value={form.postprocessModel}
+                      onChange={(e) => handleChange("postprocessModel", e.target.value)}
+                      placeholder="gpt-5.2"
+                    />
+                  </Box>
+                </Flex>
+
+                {saveStatus === "saved" && (
+                  <Callout.Root color="green" variant="soft" role="status">
+                    <Callout.Text>保存しました</Callout.Text>
+                  </Callout.Root>
+                )}
+
+                {testStatus === "ok" && (
+                  <Callout.Root color="green" variant="soft" role="status">
+                    <Callout.Text>{testMessage}</Callout.Text>
+                  </Callout.Root>
+                )}
+
+                {testStatus === "error" && (
+                  <Callout.Root color="red" variant="soft" role="alert">
+                    <Callout.Text>{testMessage}</Callout.Text>
+                  </Callout.Root>
+                )}
+              </Flex>
+
+              <Flex className="settings-column settings-column-prompt" direction="column" gap="2">
+                <Text as="label" className="field-label" htmlFor="postprocessPrompt">
+                  フォーマット用プロンプト
                 </Text>
-                <TextField.Root
-                  id="transcriptionModel"
-                  value={form.transcriptionModel}
-                  onChange={(e) => handleChange("transcriptionModel", e.target.value)}
-                  placeholder="gpt-4o-transcribe"
+                <TextArea
+                  className="prompt-textarea"
+                  id="postprocessPrompt"
+                  value={form.postprocessPrompt}
+                  onChange={(e) => handleChange("postprocessPrompt", e.target.value)}
+                  rows={18}
+                  placeholder="後処理時に system role として渡すプロンプト"
                 />
-              </Box>
-              <Box className="field-half">
-                <Text as="label" className="field-label" htmlFor="postprocessModel">
-                  後処理モデル
-                </Text>
-                <TextField.Root
-                  id="postprocessModel"
-                  value={form.postprocessModel}
-                  onChange={(e) => handleChange("postprocessModel", e.target.value)}
-                  placeholder="gpt-5.2"
-                />
-              </Box>
-            </Flex>
+              </Flex>
+            </div>
 
-            <Box>
-              <Text as="label" className="field-label" htmlFor="postprocessPrompt">
-                フォーマット用プロンプト
-              </Text>
-              <TextArea
-                id="postprocessPrompt"
-                value={form.postprocessPrompt}
-                onChange={(e) => handleChange("postprocessPrompt", e.target.value)}
-                rows={8}
-                placeholder="後処理時に system role として渡すプロンプト"
-              />
-            </Box>
-
-            <Flex gap="3" justify="end" mt="2">
+            <Flex className="settings-actions" gap="3">
               <Button
                 variant="soft"
                 onClick={handleTest}
@@ -256,24 +279,6 @@ export default function App() {
               </Button>
               <Button onClick={handleSave}>保存</Button>
             </Flex>
-
-            {saveStatus === "saved" && (
-              <Callout.Root color="green" variant="soft" role="status">
-                <Callout.Text>保存しました</Callout.Text>
-              </Callout.Root>
-            )}
-
-            {testStatus === "ok" && (
-              <Callout.Root color="green" variant="soft" role="status">
-                <Callout.Text>{testMessage}</Callout.Text>
-              </Callout.Root>
-            )}
-
-            {testStatus === "error" && (
-              <Callout.Root color="red" variant="soft" role="alert">
-                <Callout.Text>{testMessage}</Callout.Text>
-              </Callout.Root>
-            )}
           </Flex>
         </Card>
       </div>

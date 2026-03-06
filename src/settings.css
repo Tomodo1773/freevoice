@@ -22,20 +22,44 @@ body {
 
 .settings-shell {
   min-height: 100vh;
-  padding: 34px 20px;
+  padding: 16px;
   display: flex;
   align-items: flex-start;
   justify-content: center;
 }
 
 .settings-card {
-  width: min(760px, 100%);
-  border: 1px solid rgba(20, 64, 86, 0.12);
-  box-shadow:
-    0 16px 40px rgba(15, 44, 61, 0.12),
-    0 2px 8px rgba(15, 44, 61, 0.08);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(8px);
+  width: min(1120px, 100%);
+  border: none;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: none;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(420px, 1fr);
+  gap: 20px;
+  align-items: stretch;
+}
+
+.settings-column {
+  min-width: 0;
+}
+
+.settings-column-prompt {
+  min-height: 0;
+}
+
+.prompt-textarea {
+  flex: 1;
+  min-height: 500px;
+  resize: none;
+}
+
+.settings-actions {
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .field-label {
@@ -54,6 +78,15 @@ body {
 @media (max-width: 720px) {
   .settings-shell {
     padding: 16px;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-textarea {
+    min-height: 320px;
+    resize: vertical;
   }
 
   .field-half {
