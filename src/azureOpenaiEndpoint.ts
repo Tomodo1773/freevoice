@@ -3,7 +3,7 @@ function normalizeEndpoint(endpoint: string): URL {
     return new URL(endpoint.trim());
   } catch {
     throw new Error(
-      "endpoint は https://{resource}.services.ai.azure.com または https://{resource}.openai.azure.com 形式で設定してください"
+      "endpoint は https://{resource}.services.ai.azure.com/api/projects/{project}形式で設定してください"
     );
   }
 }

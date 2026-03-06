@@ -106,7 +106,7 @@ pub fn run() {
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&settings_item, &quit])?;
 
-            let _tray = TrayIconBuilder::new()
+            let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -131,8 +131,13 @@ pub fn run() {
                             let _ = w.set_focus();
                         }
                     }
-                })
-                .build(app)?;
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+
+            let _tray = tray_builder.build(app)?;
 
             // 設定画面を閉じたときは破棄せず非表示にする（2回目以降も開けるように）
             if let Some(main_win) = app.get_webview_window("main") {

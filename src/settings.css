@@ -75,6 +75,14 @@ body {
   flex: 1;
 }
 
+.field-note {
+  margin-top: 8px;
+}
+
+.field-note p + p {
+  margin-top: 4px;
+}
+
 @media (max-width: 720px) {
   .settings-shell {
     padding: 16px;

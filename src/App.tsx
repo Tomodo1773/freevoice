@@ -19,6 +19,7 @@ import { AppSettings } from "./types";
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
+const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
 
 function toShortcutMainKey(event: KeyboardEvent<HTMLInputElement>): string | null {
   if (event.code === "Space" || event.key === " ") return "Space";
@@ -193,8 +194,16 @@ export default function App() {
                     id="endpoint"
                     value={form.endpoint}
                     onChange={(e) => handleChange("endpoint", e.target.value)}
-                    placeholder="https://your-resource.services.ai.azure.com"
+                    placeholder={ENDPOINT_SAMPLE}
                   />
+                  <Box className="field-note">
+                    <Text as="p" size="1" color="gray">
+                      Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
+                    </Text>
+                    <Text as="p" size="1" color="gray">
+                      例: {ENDPOINT_SAMPLE}
+                    </Text>
+                  </Box>
                 </Box>
 
                 <Box>
