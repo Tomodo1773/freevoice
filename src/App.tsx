@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { KeyboardEvent, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -18,12 +18,43 @@ import { useSettings } from "./useSettings";
 import { AppSettings } from "./types";
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 
+const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
+
+function toShortcutMainKey(event: KeyboardEvent<HTMLInputElement>): string | null {
+  if (event.code === "Space" || event.key === " ") return "Space";
+  if (event.code.startsWith("Key")) return event.code.slice(3).toUpperCase();
+  if (event.code.startsWith("Digit")) return event.code.slice(5);
+
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key.toUpperCase();
+
+  const keyMap: Record<string, string> = {
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    Escape: "Esc",
+  };
+
+  return keyMap[event.key] ?? null;
+}
+
 export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
+  const [isCapturingShortcut, setIsCapturingShortcut] = useState(false);
+  const [shortcutHint, setShortcutHint] = useState("");
 
   const handleChange = (field: keyof AppSettings, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -71,6 +102,52 @@ export default function App() {
     }
   };
 
+  const handleShortcutKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!isCapturingShortcut) return;
+
+    event.preventDefault();
+
+    if (event.key === "Escape") {
+      setIsCapturingShortcut(false);
+      setShortcutHint("登録をキャンセルしました。");
+      return;
+    }
+
+    if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      handleChange("shortcut", "");
+      setIsCapturingShortcut(false);
+      setShortcutHint("ショートカットをクリアしました。");
+      return;
+    }
+
+    if (MODIFIER_KEYS.has(event.key)) {
+      setShortcutHint("修飾キーを押したまま、他のキーを押してください。");
+      return;
+    }
+
+    const mainKey = toShortcutMainKey(event);
+    if (!mainKey) {
+      setShortcutHint("このキーは登録できません。別のキーを試してください。");
+      return;
+    }
+
+    const parts: string[] = [];
+    if (event.ctrlKey) parts.push("Ctrl");
+    if (event.altKey) parts.push("Alt");
+    if (event.shiftKey) parts.push("Shift");
+    if (event.metaKey) parts.push("Meta");
+
+    if (parts.length === 0) {
+      setShortcutHint("修飾キー（Ctrl / Alt / Shift / Meta）を含めてください。");
+      return;
+    }
+
+    const nextShortcut = [...parts, mainKey].join("+");
+    handleChange("shortcut", nextShortcut);
+    setIsCapturingShortcut(false);
+    setShortcutHint(`登録候補: ${nextShortcut}`);
+  };
+
   return (
     <Theme appearance="light" accentColor="cyan" grayColor="sand" radius="large" scaling="100%">
       <div className="settings-shell">
@@ -92,9 +169,18 @@ export default function App() {
               <TextField.Root
                 id="shortcut"
                 value={form.shortcut}
-                onChange={(e) => handleChange("shortcut", e.target.value)}
-                placeholder="Ctrl+Shift+Space"
+                readOnly
+                onFocus={() => {
+                  setIsCapturingShortcut(true);
+                  setShortcutHint("待機中: 押したキーの組み合わせを登録します（Escでキャンセル）。");
+                }}
+                onBlur={() => setIsCapturingShortcut(false)}
+                onKeyDown={handleShortcutKeyDown}
+                placeholder="クリックしてからショートカットを押す"
               />
+              <Text size="1" color={isCapturingShortcut ? "cyan" : "gray"} mt="1">
+                {shortcutHint || "この欄をクリック後にキーを押すと自動登録されます。Backspace でクリアできます。"}
+              </Text>
             </Box>
 
             <Box>
