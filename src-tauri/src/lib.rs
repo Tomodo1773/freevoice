@@ -49,18 +49,39 @@ fn set_click_through(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn position_overlay(window: WebviewWindow) -> Result<(), String> {
-    if let Some(monitor) = window.primary_monitor().map_err(|e| e.to_string())? {
+    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+    if monitors.is_empty() {
+        return Ok(());
+    }
+
+    // カーソル位置からアクティブモニターを特定（物理座標で比較）
+    let active = if let Ok(cursor) = window.cursor_position() {
+        monitors.iter().find(|m| {
+            let pos = m.position();
+            let size = m.size();
+            cursor.x >= pos.x as f64
+                && cursor.x < (pos.x + size.width as i32) as f64
+                && cursor.y >= pos.y as f64
+                && cursor.y < (pos.y + size.height as i32) as f64
+        })
+    } else {
+        None
+    };
+
+    // フォールバック: カーソル不明 → 最初のモニター
+    let monitor = active.or_else(|| monitors.first());
+
+    if let Some(monitor) = monitor {
+        let pos = monitor.position();
         let size = monitor.size();
         let scale = monitor.scale_factor();
         let win_width = 600.0_f64;
         let win_height = 80.0_f64;
-        let x = (size.width as f64 / scale / 2.0 - win_width / 2.0) as i32;
-        let y = (size.height as f64 / scale - win_height - 60.0) as i32;
+        // モニター中央下部に配置（物理座標）
+        let x = pos.x as f64 + size.width as f64 / 2.0 - win_width * scale / 2.0;
+        let y = pos.y as f64 + size.height as f64 - (win_height + 60.0) * scale;
         window
-            .set_position(tauri::PhysicalPosition::new(
-                (x as f64 * scale) as i32,
-                (y as f64 * scale) as i32,
-            ))
+            .set_position(tauri::PhysicalPosition::new(x as i32, y as i32))
             .map_err(|e| e.to_string())?;
     }
     Ok(())

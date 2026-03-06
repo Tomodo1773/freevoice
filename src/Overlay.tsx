@@ -125,6 +125,7 @@ export default function Overlay() {
 
     const appWindow = getCurrentWebviewWindow();
     await appWindow.setFocusable(false).catch(() => {});
+    await invoke("position_overlay").catch(() => {});
     await appWindow.show();
 
     const session = new TranscriptionSession();
