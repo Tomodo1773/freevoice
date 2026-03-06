@@ -1,0 +1,62 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Aptos", "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(95, 197, 255, 0.18), transparent 35%),
+    radial-gradient(circle at 90% 88%, rgba(0, 190, 160, 0.2), transparent 38%),
+    linear-gradient(168deg, #f6fafc 0%, #eef8f6 100%);
+  color: #111827;
+}
+
+.settings-shell {
+  min-height: 100vh;
+  padding: 34px 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.settings-card {
+  width: min(760px, 100%);
+  border: 1px solid rgba(20, 64, 86, 0.12);
+  box-shadow:
+    0 16px 40px rgba(15, 44, 61, 0.12),
+    0 2px 8px rgba(15, 44, 61, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(8px);
+}
+
+.field-label {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3c485a;
+  letter-spacing: 0.02em;
+}
+
+.field-half {
+  flex: 1;
+}
+
+@media (max-width: 720px) {
+  .settings-shell {
+    padding: 16px;
+  }
+
+  .field-half {
+    min-width: 0;
+  }
+}

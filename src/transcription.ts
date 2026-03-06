@@ -30,6 +30,7 @@ export class TranscriptionSession {
   private chunks: BlobPart[] = [];
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+  private peakAudioLevel = 0;
   private endpoint = "";
   private apiKey = "";
   private model = "";
@@ -60,6 +61,7 @@ export class TranscriptionSession {
 
     const mimeType = pickMimeType();
     this.chunks = [];
+    this.peakAudioLevel = 0;
     this.mediaRecorder = mimeType
       ? new MediaRecorder(this.mediaStream, { mimeType })
       : new MediaRecorder(this.mediaStream);
@@ -75,12 +77,15 @@ export class TranscriptionSession {
     this.analyser.getByteFrequencyData(levelBuffer);
     let sum = 0;
     for (const value of levelBuffer) sum += value;
-    return sum / levelBuffer.length / 255;
+    const level = sum / levelBuffer.length / 255;
+    this.peakAudioLevel = Math.max(this.peakAudioLevel, level);
+    return level;
   }
 
   async stop(): Promise<string> {
     const recorder = this.mediaRecorder;
     if (!recorder) throw new Error("録音セッションが開始されていません");
+    this.getAudioLevel();
 
     await new Promise<void>((resolve) => {
       const finalize = () => resolve();
@@ -102,6 +107,7 @@ export class TranscriptionSession {
     this.chunks = [];
 
     if (blob.size === 0) return "";
+    if (this.peakAudioLevel < 0.2) return "";
 
     const form = new FormData();
     form.append("model", this.model);

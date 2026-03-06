@@ -144,12 +144,17 @@ export default function Overlay() {
     const settings = loadSettings();
     const session = sessionRef.current;
     if (!session) return;
-
-    setStatus("formatting");
+    sessionRef.current = null;
 
     try {
       const raw = await session.stop();
+      if (!raw.trim()) {
+        scheduleHide(150);
+        return;
+      }
+
       setTranscript(raw);
+      setStatus("formatting");
       const formatted = await postprocess(
         raw,
         settings.endpoint,
@@ -183,46 +188,62 @@ export default function Overlay() {
 
   const pillClass = [
     "overlay-pill",
-    status === "done" ? "status-done" : "",
-    status === "error" ? "status-error" : "",
+    `status-${status}`,
     fading ? "fading" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   const icon =
-    status === "listening" ? "🎤" :
-    status === "formatting" ? <span className="spinner">⟳</span> :
+    status === "listening" ? "●" :
+    status === "formatting" ? <span className="spinner">◌</span> :
     status === "done" ? "✓" :
-    "✕";
+    "!";
+
+  const statusLabel =
+    status === "listening"
+      ? "Recording"
+      : status === "formatting"
+      ? "Formatting"
+      : status === "done"
+      ? "Done"
+      : "Error";
 
   const text =
     status === "listening"
-      ? transcript || (silentWarn ? "マイク入力が無音かも" : "聞いています...")
+      ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
       : status === "formatting"
-      ? "整形中..."
+      ? "Formatting..."
       : status === "done"
-      ? "入力完了"
+      ? "Completed"
       : errorMsg;
 
   return (
     <div className="overlay-wrapper">
       <div className={pillClass}>
-        <span className="overlay-icon">{icon}</span>
-        {status === "listening" && (
-          <span className="vu" aria-hidden="true">
-            <span
-              className="vu-bar"
-              style={{ width: `${Math.min(100, Math.round(audioLevel * 260))}%` }}
-            />
+        <span className="overlay-glow" aria-hidden="true" />
+        <div className="overlay-leading">
+          <span className="overlay-icon">{icon}</span>
+          <span className="overlay-status">{statusLabel}</span>
+        </div>
+        <div className="overlay-body">
+          {status === "listening" && (
+            <span className="vu" aria-hidden="true">
+              <span
+                className="vu-bar"
+                style={{ width: `${Math.min(100, Math.round(audioLevel * 260))}%` }}
+              />
+            </span>
+          )}
+          <span className={`overlay-text ${status === "error" ? "overlay-text-error" : ""}`}>
+            {text}
           </span>
-        )}
-        <span className={`overlay-text ${status === "error" ? "overlay-text-error" : ""}`}>
-          {text}
-        </span>
+        </div>
         {status === "error" && (
           <span className="overlay-meta">
-            {errorCopied ? "エラー内容をクリップボードにコピーしました" : "コピーに失敗しました"}
+            {errorCopied
+              ? "Error details copied to clipboard"
+              : "Failed to copy error details to clipboard"}
           </span>
         )}
       </div>
