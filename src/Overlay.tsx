@@ -159,7 +159,8 @@ export default function Overlay() {
         raw,
         settings.endpoint,
         settings.apiKey,
-        settings.postprocessModel
+        settings.postprocessModel,
+        settings.postprocessPrompt
       );
 
       await invoke("paste_text", { text: formatted });

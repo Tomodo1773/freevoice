@@ -10,6 +10,7 @@ import {
   Heading,
   Separator,
   Text,
+  TextArea,
   TextField,
   Theme,
 } from "@radix-ui/themes";
@@ -145,6 +146,19 @@ export default function App() {
                 />
               </Box>
             </Flex>
+
+            <Box>
+              <Text as="label" className="field-label" htmlFor="postprocessPrompt">
+                フォーマット用プロンプト
+              </Text>
+              <TextArea
+                id="postprocessPrompt"
+                value={form.postprocessPrompt}
+                onChange={(e) => handleChange("postprocessPrompt", e.target.value)}
+                rows={8}
+                placeholder="後処理時に system role として渡すプロンプト"
+              />
+            </Box>
 
             <Flex gap="3" justify="end" mt="2">
               <Button
