@@ -1,4 +1,5 @@
 import { KeyboardEvent, useState } from "react";
+import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -155,7 +156,10 @@ export default function App() {
         <Card className="settings-card" size="4">
           <Flex direction="column" gap="4">
             <Flex align="center" justify="between">
-              <Heading size="6">FreeVoice 設定</Heading>
+              <Flex align="center" gap="2">
+                <img src={appIcon} alt="FreeVoice" style={{ width: 28, height: 28 }} />
+                <Heading size="6">FreeVoice 設定</Heading>
+              </Flex>
               <Badge variant="soft" color="cyan">
                 Push-to-Talk
               </Badge>
