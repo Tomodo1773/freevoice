@@ -22,12 +22,10 @@ function toUserMessage(err: unknown): string {
   const msg = formatError(err);
   if (msg.startsWith("文字起こしAPI エラー")) return "文字起こしAPIでエラーが発生しました";
   if (msg.startsWith("後処理API エラー")) return "後処理APIでエラーが発生しました";
-  // マイク権限系エラー
-  if (
-    err instanceof DOMException &&
-    (err.name === "NotAllowedError" || err.name === "NotFoundError")
-  ) {
-    return "マイクの使用が許可されていません";
+  // マイク権限・デバイス系エラー
+  if (err instanceof DOMException) {
+    if (err.name === "NotAllowedError") return "マイクの使用が許可されていません";
+    if (err.name === "NotFoundError") return "マイクが見つかりません";
   }
   // 設定バリデーション系のメッセージはそのまま（短いため）
   if (
@@ -37,6 +35,17 @@ function toUserMessage(err: unknown): string {
     return msg;
   }
   return "エラーが発生しました";
+}
+
+async function saveLogEntry(
+  logFolder: string,
+  now: Date,
+  data: { transcription: string; formatted: string; error?: string }
+): Promise<void> {
+  const isoTimestamp = now.toISOString();
+  const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
+  const content = JSON.stringify({ timestamp: isoTimestamp, ...data }, null, 2);
+  await invoke("save_log", { folder: logFolder, filename, content });
 }
 
 export default function Overlay() {
@@ -161,14 +170,7 @@ export default function Overlay() {
       // エラー詳細をログファイルに出力
       try {
         const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
-        const isoTimestamp = now.toISOString();
-        const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
-        const logEntry = JSON.stringify(
-          { timestamp: isoTimestamp, transcription: "", formatted: "", error: formatError(e) },
-          null,
-          2
-        );
-        await invoke("save_log", { folder: logFolder, filename, content: logEntry });
+        await saveLogEntry(logFolder, now, { transcription: "", formatted: "", error: formatError(e) });
       } catch (logErr) {
         console.error("[FreeVoice] save_log failed", logErr);
       }
@@ -221,22 +223,10 @@ export default function Overlay() {
       if ((rawTranscript && configuredFolder) || hasError) {
         try {
           const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
-          const isoTimestamp = now.toISOString();
-          const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
-          const logEntry = JSON.stringify(
-            {
-              timestamp: isoTimestamp,
-              transcription: rawTranscript,
-              formatted: formattedText,
-              ...(hasError ? { error: formatError(stopError) } : {}),
-            },
-            null,
-            2
-          );
-          await invoke("save_log", {
-            folder: logFolder,
-            filename,
-            content: logEntry,
+          await saveLogEntry(logFolder, now, {
+            transcription: rawTranscript,
+            formatted: formattedText,
+            ...(hasError ? { error: formatError(stopError) } : {}),
           });
         } catch (logErr) {
           console.error("[FreeVoice] save_log failed", logErr);

@@ -88,7 +88,7 @@ fn position_overlay(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn save_log(folder: String, filename: String, content: String) -> Result<(), String> {
+fn save_log(folder: String, filename: String, content: String) -> Result<(), String> {
     let dir = std::path::Path::new(&folder);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(&filename), content.as_bytes()).map_err(|e| e.to_string())
