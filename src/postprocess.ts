@@ -1,12 +1,13 @@
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
-import { DEFAULT_SETTINGS } from "./types";
+import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
 
 export async function postprocess(
   transcript: string,
   endpoint: string,
   apiKey: string,
   model: string,
-  prompt: string
+  prompt: string,
+  reasoningEffort: ReasoningEffort = "low"
 ): Promise<string> {
   if (!transcript.trim()) return transcript;
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
@@ -30,7 +31,7 @@ export async function postprocess(
           content: transcript,
         },
       ],
-      reasoning_effort: "low",
+      reasoning_effort: reasoningEffort,
     }),
   });
 

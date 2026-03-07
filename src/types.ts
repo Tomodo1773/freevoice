@@ -1,5 +1,7 @@
 export type OverlayStatus = "listening" | "transcribing" | "formatting" | "done" | "error";
 
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
@@ -8,6 +10,7 @@ export interface AppSettings {
   postprocessModel: string;
   postprocessPrompt: string;
   logFolder: string;
+  reasoningEffort: ReasoningEffort;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -35,4 +38,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
 - 勝手に内容を追加しない。あくまでユーザの発言を修正することに徹すること。
 `,
   logFolder: "",
+  reasoningEffort: "low",
 };

@@ -9,6 +9,7 @@ import {
   Card,
   Flex,
   Heading,
+  Select,
   Separator,
   Text,
   TextArea,
@@ -16,7 +17,7 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import { useSettings } from "./useSettings";
-import { AppSettings } from "./types";
+import { AppSettings, ReasoningEffort } from "./types";
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
@@ -262,6 +263,24 @@ export default function App() {
                     />
                   </Box>
                 </Flex>
+
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="reasoningEffort">
+                    Reasoning Effort（後処理AI）
+                  </Text>
+                  <Select.Root
+                    value={form.reasoningEffort}
+                    onValueChange={(v) => handleChange("reasoningEffort", v as ReasoningEffort)}
+                  >
+                    <Select.Trigger id="reasoningEffort" style={{ width: "100%" }} />
+                    <Select.Content>
+                      <Select.Item value="none">none</Select.Item>
+                      <Select.Item value="low">low</Select.Item>
+                      <Select.Item value="medium">medium</Select.Item>
+                      <Select.Item value="high">high</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </Box>
 
                 {saveStatus === "saved" && (
                   <Callout.Root color="green" variant="soft" role="status">

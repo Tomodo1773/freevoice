@@ -205,7 +205,8 @@ export default function Overlay() {
         settings.endpoint,
         settings.apiKey,
         settings.postprocessModel,
-        settings.postprocessPrompt
+        settings.postprocessPrompt,
+        settings.reasoningEffort
       );
       formattedText = formatted;
 
