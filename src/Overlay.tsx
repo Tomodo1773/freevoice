@@ -17,11 +17,32 @@ function formatError(err: unknown): string {
   }
 }
 
+/** 詳細なエラーを短い定型メッセージに変換する（オーバーレイ表示用） */
+function toUserMessage(err: unknown): string {
+  const msg = formatError(err);
+  if (msg.startsWith("文字起こしAPI エラー")) return "文字起こしAPIでエラーが発生しました";
+  if (msg.startsWith("後処理API エラー")) return "後処理APIでエラーが発生しました";
+  // マイク権限系エラー
+  if (
+    err instanceof DOMException &&
+    (err.name === "NotAllowedError" || err.name === "NotFoundError")
+  ) {
+    return "マイクの使用が許可されていません";
+  }
+  // 設定バリデーション系のメッセージはそのまま（短いため）
+  if (
+    msg.includes("が未設定です") ||
+    msg.includes("形式で設定してください")
+  ) {
+    return msg;
+  }
+  return "エラーが発生しました";
+}
+
 export default function Overlay() {
   const [status, setStatus] = useState<OverlayStatus>("listening");
   const [transcript, setTranscript] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [errorCopied, setErrorCopied] = useState(false);
   const [fading, setFading] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
@@ -95,24 +116,10 @@ export default function Overlay() {
     };
   }, [status]);
 
-  useEffect(() => {
-    if (status !== "error" || !errorMsg) return;
-    let active = true;
-    (async () => {
-      try {
-        await navigator.clipboard.writeText(errorMsg);
-        if (active) setErrorCopied(true);
-      } catch (e) {
-        console.error("[FreeVoice] clipboard copy failed", e);
-        if (active) setErrorCopied(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [status, errorMsg]);
+  // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
+    const now = new Date();
     // 録音開始音
     const ctx = new AudioContext();
     const oscillator = ctx.createOscillator();
@@ -131,7 +138,6 @@ export default function Overlay() {
     setStatus("listening");
     setTranscript("");
     setErrorMsg("");
-    setErrorCopied(false);
     setFading(false);
     setAudioLevel(0);
     setSilentWarn(false);
@@ -150,8 +156,22 @@ export default function Overlay() {
     } catch (e) {
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
-      setErrorMsg(formatError(e));
+      setErrorMsg(toUserMessage(e));
       scheduleHide(5000);
+      // エラー詳細をログファイルに出力
+      try {
+        const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
+        const isoTimestamp = now.toISOString();
+        const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
+        const logEntry = JSON.stringify(
+          { timestamp: isoTimestamp, transcription: "", formatted: "", error: formatError(e) },
+          null,
+          2
+        );
+        await invoke("save_log", { folder: logFolder, filename, content: logEntry });
+      } catch (logErr) {
+        console.error("[FreeVoice] save_log failed", logErr);
+      }
     }
   };
 
@@ -192,13 +212,13 @@ export default function Overlay() {
       stopError = e;
       console.error("[FreeVoice] handleStop failed", e);
       setStatus("error");
-      setErrorMsg(formatError(e));
+      setErrorMsg(toUserMessage(e));
       scheduleHide(5000);
     } finally {
       const configuredFolder = settings.logFolder.trim();
       const hasError = stopError !== null && formattedText === "";
       // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
-      if (rawTranscript && (configuredFolder || hasError)) {
+      if ((rawTranscript && configuredFolder) || hasError) {
         try {
           const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
           const isoTimestamp = now.toISOString();
@@ -293,9 +313,7 @@ export default function Overlay() {
         </div>
         {status === "error" && (
           <span className="overlay-meta">
-            {errorCopied
-              ? "Error details copied to clipboard"
-              : "Failed to copy error details to clipboard"}
+            詳細はログファイルに出力されています
           </span>
         )}
       </div>
