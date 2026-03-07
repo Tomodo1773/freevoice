@@ -88,6 +88,21 @@ fn position_overlay(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_log(folder: String, filename: String, content: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&folder);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(&filename), content.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|p| p.join("logs").to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn update_shortcut(
     app: AppHandle,
     shortcut_state: tauri::State<'_, AppShortcutState>,
@@ -191,6 +206,8 @@ pub fn run() {
             set_click_through,
             position_overlay,
             update_shortcut,
+            save_log,
+            get_app_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

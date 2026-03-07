@@ -7,6 +7,7 @@ export interface AppSettings {
   transcriptionModel: string;
   postprocessModel: string;
   postprocessPrompt: string;
+  logFolder: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -23,4 +24,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
     "3. 「えーと」「あのー」「えっと」「まあ」などのフィラーワードを削除する\n" +
     "4. 文章の意味・内容は変えない\n" +
     "5. 修正済みテキストのみを返す（説明や前置きは不要）",
+  logFolder: "",
 };

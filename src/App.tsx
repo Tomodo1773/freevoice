@@ -223,6 +223,21 @@ export default function App() {
                   />
                 </Box>
 
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="logFolder">
+                    ログ保存フォルダー
+                  </Text>
+                  <TextField.Root
+                    id="logFolder"
+                    value={form.logFolder}
+                    onChange={(e) => handleChange("logFolder", e.target.value)}
+                    placeholder="例: C:\Users\you\Documents\FreeVoiceLogs（空欄で無効）"
+                  />
+                  <Text size="1" color="gray" mt="1">
+                    空欄の場合、エラーログのみ %LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
+                  </Text>
+                </Box>
+
                 <Flex gap="4">
                   <Box className="field-half">
                     <Text as="label" className="field-label" htmlFor="transcriptionModel">
