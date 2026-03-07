@@ -234,7 +234,7 @@ export default function App() {
                     placeholder="例: C:\Users\you\Documents\FreeVoiceLogs（空欄で無効）"
                   />
                   <Text size="1" color="gray" mt="1">
-                    空欄のままにするとログは保存されません。1回の録音につき1つのJSONファイルが出力されます。
+                    空欄の場合、エラーログのみ %LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
                   </Text>
                 </Box>
 

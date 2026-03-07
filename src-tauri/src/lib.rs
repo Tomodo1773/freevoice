@@ -95,6 +95,14 @@ async fn save_log(folder: String, filename: String, content: String) -> Result<(
 }
 
 #[tauri::command]
+fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|p| p.join("logs").to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn update_shortcut(
     app: AppHandle,
     shortcut_state: tauri::State<'_, AppShortcutState>,
@@ -199,6 +207,7 @@ pub fn run() {
             position_overlay,
             update_shortcut,
             save_log,
+            get_app_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

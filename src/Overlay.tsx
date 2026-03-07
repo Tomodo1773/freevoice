@@ -195,8 +195,12 @@ export default function Overlay() {
       setErrorMsg(formatError(e));
       scheduleHide(5000);
     } finally {
-      if (settings.logFolder.trim() && rawTranscript) {
+      const configuredFolder = settings.logFolder.trim();
+      const hasError = stopError !== null && formattedText === "";
+      // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
+      if (rawTranscript && (configuredFolder || hasError)) {
         try {
+          const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
           const isoTimestamp = now.toISOString();
           const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
           const logEntry = JSON.stringify(
@@ -204,15 +208,13 @@ export default function Overlay() {
               timestamp: isoTimestamp,
               transcription: rawTranscript,
               formatted: formattedText,
-              ...(stopError !== null && formattedText === ""
-                ? { error: formatError(stopError) }
-                : {}),
+              ...(hasError ? { error: formatError(stopError) } : {}),
             },
             null,
             2
           );
           await invoke("save_log", {
-            folder: settings.logFolder.trim(),
+            folder: logFolder,
             filename,
             content: logEntry,
           });
