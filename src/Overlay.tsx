@@ -188,6 +188,8 @@ export default function Overlay() {
     let formattedText = "";
     let stopError: unknown = null;
 
+    setStatus("transcribing");
+
     try {
       const raw = await session.stop();
       if (!raw.trim()) {
@@ -258,6 +260,7 @@ export default function Overlay() {
 
   const icon =
     status === "listening" ? "●" :
+    status === "transcribing" ? <span className="spinner">◌</span> :
     status === "formatting" ? <span className="spinner">◌</span> :
     status === "done" ? "✓" :
     "!";
@@ -265,6 +268,8 @@ export default function Overlay() {
   const statusLabel =
     status === "listening"
       ? "Recording"
+      : status === "transcribing"
+      ? "Transcribing"
       : status === "formatting"
       ? "Formatting"
       : status === "done"
@@ -274,6 +279,8 @@ export default function Overlay() {
   const text =
     status === "listening"
       ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
+      : status === "transcribing"
+      ? "Transcribing..."
       : status === "formatting"
       ? "Formatting..."
       : status === "done"

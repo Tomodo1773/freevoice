@@ -1,4 +1,4 @@
-export type OverlayStatus = "listening" | "formatting" | "done" | "error";
+export type OverlayStatus = "listening" | "transcribing" | "formatting" | "done" | "error";
 
 export interface AppSettings {
   shortcut: string;
