@@ -13,11 +13,23 @@ struct AppShortcutState {
 
 #[tauri::command]
 async fn paste_text(text: String) -> Result<(), String> {
-    let text_clone = text.clone();
     std::thread::spawn(move || {
-        use enigo::Keyboard;
+        use enigo::{Direction, Keyboard, Key};
+
+        // クリップボードにテキストをセット
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        clipboard.set_text(&text).map_err(|e| e.to_string())?;
+
+        // クリップボードが確実にセットされるまで待機
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Ctrl+V を送信
         let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
-        enigo.text(&text_clone).map_err(|e| e.to_string())
+        enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
+        enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+        enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
+
+        Ok(())
     })
     .join()
     .map_err(|_| "スレッドパニック".to_string())?
