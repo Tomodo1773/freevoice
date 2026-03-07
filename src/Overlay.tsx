@@ -161,6 +161,11 @@ export default function Overlay() {
     if (!session) return;
     sessionRef.current = null;
 
+    const now = new Date();
+    let rawTranscript = "";
+    let formattedText = "";
+    let stopError: unknown = null;
+
     try {
       const raw = await session.stop();
       if (!raw.trim()) {
@@ -168,6 +173,7 @@ export default function Overlay() {
         return;
       }
 
+      rawTranscript = raw;
       setTranscript(raw);
       setStatus("formatting");
       const formatted = await postprocess(
@@ -177,15 +183,43 @@ export default function Overlay() {
         settings.postprocessModel,
         settings.postprocessPrompt
       );
+      formattedText = formatted;
 
       await invoke("paste_text", { text: formatted });
       setStatus("done");
       scheduleHide(1000);
     } catch (e) {
+      stopError = e;
       console.error("[FreeVoice] handleStop failed", e);
       setStatus("error");
       setErrorMsg(formatError(e));
       scheduleHide(5000);
+    } finally {
+      if (settings.logFolder.trim() && rawTranscript) {
+        try {
+          const isoTimestamp = now.toISOString();
+          const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
+          const logEntry = JSON.stringify(
+            {
+              timestamp: isoTimestamp,
+              transcription: rawTranscript,
+              formatted: formattedText,
+              ...(stopError !== null && formattedText === ""
+                ? { error: formatError(stopError) }
+                : {}),
+            },
+            null,
+            2
+          );
+          await invoke("save_log", {
+            folder: settings.logFolder.trim(),
+            filename,
+            content: logEntry,
+          });
+        } catch (logErr) {
+          console.error("[FreeVoice] save_log failed", logErr);
+        }
+      }
     }
   };
 
