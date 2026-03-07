@@ -41,3 +41,5 @@ Desktop.ini
 .eslintcache
 .parcel-cache/
 
+# Agent
+.claude/settings.local.json
