@@ -30,7 +30,7 @@ export async function postprocess(
           content: transcript,
         },
       ],
-      reasoning_effort: "none",
+      reasoning_effort: "medium",
     }),
   });
 
