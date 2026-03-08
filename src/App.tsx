@@ -1,6 +1,7 @@
-import { KeyboardEvent, useState } from "react";
+import { KeyboardEvent, useEffect, useState } from "react";
 import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
+import { getApiKey, setApiKey } from "./apiKeyStore";
 import {
   Badge,
   Box,
@@ -41,6 +42,7 @@ function toShortcutMainKey(event: KeyboardEvent<HTMLInputElement>): string | nul
 export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
+  const [apiKeyInput, setApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
@@ -48,12 +50,36 @@ export default function App() {
   const [isManualInput, setIsManualInput] = useState(false);
   const [shortcutHint, setShortcutHint] = useState("");
 
+  useEffect(() => {
+    (async () => {
+      const key = await getApiKey();
+      if (key) {
+        setApiKeyInput(key);
+      } else {
+        // localStorage からのマイグレーション
+        try {
+          const stored = localStorage.getItem("freevoice-settings");
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed.apiKey) {
+              await setApiKey(parsed.apiKey);
+              setApiKeyInput(parsed.apiKey);
+              delete parsed.apiKey;
+              localStorage.setItem("freevoice-settings", JSON.stringify(parsed));
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    })();
+  }, []);
+
   const handleChange = (field: keyof AppSettings, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSave = async () => {
     saveSettings(form);
+    await setApiKey(apiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
@@ -72,7 +98,7 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "api-key": form.apiKey,
+          "api-key": apiKeyInput,
         },
         body: JSON.stringify({
           messages: [{ role: "user", content: "ping" }],
@@ -233,8 +259,8 @@ export default function App() {
                   <TextField.Root
                     id="apiKey"
                     type="password"
-                    value={form.apiKey}
-                    onChange={(e) => handleChange("apiKey", e.target.value)}
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
                     placeholder="••••••••••••••••••••••••"
                   />
                 </Box>
@@ -354,7 +380,7 @@ export default function App() {
               <Button
                 variant="soft"
                 onClick={handleTest}
-                disabled={testStatus === "testing" || !form.endpoint || !form.apiKey}
+                disabled={testStatus === "testing" || !form.endpoint || !apiKeyInput}
               >
                 {testStatus === "testing" ? "テスト中..." : "接続テスト"}
               </Button>

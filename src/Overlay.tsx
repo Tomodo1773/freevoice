@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocess } from "./postprocess";
 import { loadSettings } from "./useSettings";
+import { getApiKey } from "./apiKeyStore";
 import { OverlayStatus } from "./types";
 
 function formatError(err: unknown): string {
@@ -144,6 +145,7 @@ export default function Overlay() {
     oscillator.onended = () => ctx.close();
 
     const settings = loadSettings();
+    const apiKey = await getApiKey();
     setStatus("listening");
     setTranscript("");
     setErrorMsg("");
@@ -161,7 +163,7 @@ export default function Overlay() {
     sessionRef.current = session;
 
     try {
-      await session.start(settings.endpoint, settings.apiKey, settings.transcriptionModel);
+      await session.start(settings.endpoint, apiKey, settings.transcriptionModel);
     } catch (e) {
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
@@ -179,6 +181,7 @@ export default function Overlay() {
 
   const handleStop = async () => {
     const settings = loadSettings();
+    const apiKey = await getApiKey();
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
@@ -203,7 +206,7 @@ export default function Overlay() {
       const formatted = await postprocess(
         raw,
         settings.endpoint,
-        settings.apiKey,
+        apiKey,
         settings.postprocessModel,
         settings.postprocessPrompt,
         settings.reasoningEffort

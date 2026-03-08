@@ -7,7 +7,6 @@ export type InputMethod = "clipboard" | "keystroke";
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
-  apiKey: string;
   transcriptionModel: string;
   postprocessModel: string;
   postprocessPrompt: string;
@@ -19,7 +18,6 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   shortcut: "Ctrl+Shift+Space",
   endpoint: "",
-  apiKey: "",
   transcriptionModel: "gpt-4o-transcribe",
   postprocessModel: "gpt-5.2",
   postprocessPrompt: `ユーザが音声入力した内容を修正して返す。
