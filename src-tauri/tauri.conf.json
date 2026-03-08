@@ -52,5 +52,7 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "store": {}
+  }
 }

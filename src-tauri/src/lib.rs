@@ -152,6 +152,7 @@ async fn update_shortcut(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AppShortcutState {
             current: Arc::new(Mutex::new("Ctrl+Shift+Space".to_string())),
         })
