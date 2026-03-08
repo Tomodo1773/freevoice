@@ -57,6 +57,14 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (settings.shortcut !== "Ctrl+Shift+Space") {
+      invoke("update_shortcut", { shortcut: settings.shortcut }).catch((e) =>
+        console.error("起動時ショートカット同期失敗:", e)
+      );
+    }
+  }, []);
+
   const handleChange = (field: keyof AppSettings, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
