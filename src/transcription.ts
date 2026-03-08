@@ -1,9 +1,5 @@
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 
-function normalizeEndpoint(endpoint: string): string {
-  return endpoint.trim().replace(/\/$/, "");
-}
-
 function pickMimeType(): string {
   const candidates = [
     "audio/webm;codecs=opus",
@@ -36,7 +32,7 @@ export class TranscriptionSession {
   private model = "";
 
   async start(endpoint: string, apiKey: string, model: string): Promise<void> {
-    this.endpoint = normalizeEndpoint(endpoint);
+    this.endpoint = endpoint;
     this.apiKey = apiKey;
     this.model = model;
 

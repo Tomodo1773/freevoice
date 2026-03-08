@@ -49,6 +49,19 @@ async function saveLogEntry(
   await invoke("save_log", { folder: logFolder, filename, content });
 }
 
+async function trySaveLog(
+  configuredFolder: string,
+  now: Date,
+  data: { transcription: string; formatted: string; error?: string }
+): Promise<void> {
+  try {
+    const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
+    await saveLogEntry(logFolder, now, data);
+  } catch (logErr) {
+    console.error("[FreeVoice] save_log failed", logErr);
+  }
+}
+
 export default function Overlay() {
   const [status, setStatus] = useState<OverlayStatus>("listening");
   const [transcript, setTranscript] = useState("");
@@ -169,13 +182,7 @@ export default function Overlay() {
       setStatus("error");
       setErrorMsg(toUserMessage(e));
       scheduleHide(5000);
-      // エラー詳細をログファイルに出力
-      try {
-        const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
-        await saveLogEntry(logFolder, now, { transcription: "", formatted: "", error: formatError(e) });
-      } catch (logErr) {
-        console.error("[FreeVoice] save_log failed", logErr);
-      }
+      await trySaveLog(settings.logFolder.trim(), now, { transcription: "", formatted: "", error: formatError(e) });
     }
   };
 
@@ -227,16 +234,11 @@ export default function Overlay() {
       const hasError = stopError !== null && formattedText === "";
       // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
       if ((rawTranscript && configuredFolder) || hasError) {
-        try {
-          const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
-          await saveLogEntry(logFolder, now, {
-            transcription: rawTranscript,
-            formatted: formattedText,
-            ...(hasError ? { error: formatError(stopError) } : {}),
-          });
-        } catch (logErr) {
-          console.error("[FreeVoice] save_log failed", logErr);
-        }
+        await trySaveLog(configuredFolder, now, {
+          transcription: rawTranscript,
+          formatted: formattedText,
+          ...(hasError ? { error: formatError(stopError) } : {}),
+        });
       }
     }
   };
@@ -264,8 +266,7 @@ export default function Overlay() {
 
   const icon =
     status === "listening" ? "●" :
-    status === "transcribing" ? <span className="spinner">◌</span> :
-    status === "formatting" ? <span className="spinner">◌</span> :
+    (status === "transcribing" || status === "formatting") ? <span className="spinner">◌</span> :
     status === "done" ? "✓" :
     "!";
 
