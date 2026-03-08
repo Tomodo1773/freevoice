@@ -12,6 +12,7 @@ import {
   Heading,
   Select,
   Separator,
+  Tabs,
   Text,
   TextArea,
   TextField,
@@ -166,198 +167,207 @@ export default function App() {
 
             <Separator size="4" />
 
-            <div className="settings-grid">
-              <Flex className="settings-column" direction="column" gap="4">
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="shortcut">
-                    ショートカットキー
-                  </Text>
-                  <TextField.Root
-                    id="shortcut"
-                    value={form.shortcut}
-                    readOnly={!isManualInput}
-                    onChange={isManualInput ? (e) => handleChange("shortcut", e.target.value) : undefined}
-                    onFocus={() => {
-                      if (!isManualInput) {
-                        setIsCapturingShortcut(true);
-                        setShortcutHint("待機中: 押したキーの組み合わせを登録します（Escでキャンセル）。");
-                      }
-                    }}
-                    onBlur={() => {
-                      setIsCapturingShortcut(false);
-                      if (isManualInput) {
-                        setIsManualInput(false);
-                        setShortcutHint("");
-                      }
-                    }}
-                    onKeyDown={!isManualInput ? handleShortcutKeyDown : undefined}
-                    placeholder="クリックしてからショートカットを押す"
-                  >
-                    <TextField.Slot side="right">
-                      <Button
-                        size="1"
-                        variant="ghost"
-                        tabIndex={-1}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => {
-                          const next = !isManualInput;
-                          setIsManualInput(next);
-                          setIsCapturingShortcut(false);
-                          setShortcutHint(next ? "例: Meta+Space, Ctrl+Shift+A" : "");
-                        }}
-                      >
-                        {isManualInput ? "完了" : "手動入力"}
-                      </Button>
-                    </TextField.Slot>
-                  </TextField.Root>
-                  <Text size="1" color={isCapturingShortcut ? "cyan" : "gray"} mt="1">
-                    {shortcutHint || "この欄をクリック後にキーを押すと自動登録されます。Backspace でクリアできます。"}
-                  </Text>
-                </Box>
+            <Tabs.Root defaultValue="basic">
+              <Tabs.List>
+                <Tabs.Trigger value="basic">基本設定</Tabs.Trigger>
+                <Tabs.Trigger value="prompt">プロンプト</Tabs.Trigger>
+              </Tabs.List>
 
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="endpoint">
-                    Microsoft Foundry エンドポイント
-                  </Text>
-                  <TextField.Root
-                    id="endpoint"
-                    value={form.endpoint}
-                    onChange={(e) => handleChange("endpoint", e.target.value)}
-                    placeholder={ENDPOINT_SAMPLE}
-                  />
-                  <Box className="field-note">
-                    <Text as="p" size="1" color="gray">
-                      Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
-                    </Text>
-                    <Text as="p" size="1" color="gray">
-                      例: {ENDPOINT_SAMPLE}
-                    </Text>
-                  </Box>
-                </Box>
-
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="apiKey">
-                    API Key
-                  </Text>
-                  <TextField.Root
-                    id="apiKey"
-                    type="password"
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    placeholder="••••••••••••••••••••••••"
-                  />
-                </Box>
-
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="logFolder">
-                    ログ保存フォルダー
-                  </Text>
-                  <TextField.Root
-                    id="logFolder"
-                    value={form.logFolder}
-                    onChange={(e) => handleChange("logFolder", e.target.value)}
-                    placeholder="例: C:\Users\you\Documents\FreeVoiceLogs（空欄で無効）"
-                  />
-                  <Text size="1" color="gray" mt="1">
-                    空欄の場合、エラーログのみ %LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
-                  </Text>
-                </Box>
-
-                <Flex gap="4">
-                  <Box className="field-half">
-                    <Text as="label" className="field-label" htmlFor="transcriptionModel">
-                      文字起こしモデル
+              <Tabs.Content value="basic">
+                <Flex className="tab-content" direction="column" gap="4" pt="4">
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="shortcut">
+                      ショートカットキー
                     </Text>
                     <TextField.Root
-                      id="transcriptionModel"
-                      value={form.transcriptionModel}
-                      onChange={(e) => handleChange("transcriptionModel", e.target.value)}
-                      placeholder="gpt-4o-transcribe"
-                    />
+                      id="shortcut"
+                      value={form.shortcut}
+                      readOnly={!isManualInput}
+                      onChange={isManualInput ? (e) => handleChange("shortcut", e.target.value) : undefined}
+                      onFocus={() => {
+                        if (!isManualInput) {
+                          setIsCapturingShortcut(true);
+                          setShortcutHint("待機中: 押したキーの組み合わせを登録します（Escでキャンセル）。");
+                        }
+                      }}
+                      onBlur={() => {
+                        setIsCapturingShortcut(false);
+                        if (isManualInput) {
+                          setIsManualInput(false);
+                          setShortcutHint("");
+                        }
+                      }}
+                      onKeyDown={!isManualInput ? handleShortcutKeyDown : undefined}
+                      placeholder="クリックしてからショートカットを押す"
+                    >
+                      <TextField.Slot side="right">
+                        <Button
+                          size="1"
+                          variant="ghost"
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            const next = !isManualInput;
+                            setIsManualInput(next);
+                            setIsCapturingShortcut(false);
+                            setShortcutHint(next ? "例: Meta+Space, Ctrl+Shift+A" : "");
+                          }}
+                        >
+                          {isManualInput ? "完了" : "手動入力"}
+                        </Button>
+                      </TextField.Slot>
+                    </TextField.Root>
+                    <Text size="1" color={isCapturingShortcut ? "cyan" : "gray"} mt="1">
+                      {shortcutHint || "この欄をクリック後にキーを押すと自動登録されます。Backspace でクリアできます。"}
+                    </Text>
                   </Box>
-                  <Box className="field-half">
-                    <Text as="label" className="field-label" htmlFor="postprocessModel">
-                      後処理モデル
+
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="endpoint">
+                      Microsoft Foundry エンドポイント
                     </Text>
                     <TextField.Root
-                      id="postprocessModel"
-                      value={form.postprocessModel}
-                      onChange={(e) => handleChange("postprocessModel", e.target.value)}
-                      placeholder="gpt-5.2"
+                      id="endpoint"
+                      value={form.endpoint}
+                      onChange={(e) => handleChange("endpoint", e.target.value)}
+                      placeholder={ENDPOINT_SAMPLE}
+                    />
+                    <Box className="field-note">
+                      <Text as="p" size="1" color="gray">
+                        Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
+                      </Text>
+                      <Text as="p" size="1" color="gray">
+                        例: {ENDPOINT_SAMPLE}
+                      </Text>
+                    </Box>
+                  </Box>
+
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="apiKey">
+                      API Key
+                    </Text>
+                    <TextField.Root
+                      id="apiKey"
+                      type="password"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      placeholder="••••••••••••••••••••••••"
                     />
                   </Box>
+
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="logFolder">
+                      ログ保存フォルダー
+                    </Text>
+                    <TextField.Root
+                      id="logFolder"
+                      value={form.logFolder}
+                      onChange={(e) => handleChange("logFolder", e.target.value)}
+                      placeholder="例: C:\Users\you\Documents\FreeVoiceLogs（空欄で無効）"
+                    />
+                    <Text size="1" color="gray" mt="1">
+                      空欄の場合、エラーログのみ %LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
+                    </Text>
+                  </Box>
+
+                  <Flex gap="4">
+                    <Box className="field-half">
+                      <Text as="label" className="field-label" htmlFor="transcriptionModel">
+                        文字起こしモデル
+                      </Text>
+                      <TextField.Root
+                        id="transcriptionModel"
+                        value={form.transcriptionModel}
+                        onChange={(e) => handleChange("transcriptionModel", e.target.value)}
+                        placeholder="gpt-4o-transcribe"
+                      />
+                    </Box>
+                    <Box className="field-half">
+                      <Text as="label" className="field-label" htmlFor="postprocessModel">
+                        後処理モデル
+                      </Text>
+                      <TextField.Root
+                        id="postprocessModel"
+                        value={form.postprocessModel}
+                        onChange={(e) => handleChange("postprocessModel", e.target.value)}
+                        placeholder="gpt-5.2"
+                      />
+                    </Box>
+                  </Flex>
+
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="reasoningEffort">
+                      Reasoning Effort（後処理AI）
+                    </Text>
+                    <Select.Root
+                      value={form.reasoningEffort}
+                      onValueChange={(v) => handleChange("reasoningEffort", v as ReasoningEffort)}
+                    >
+                      <Select.Trigger id="reasoningEffort" style={{ width: "100%" }} />
+                      <Select.Content>
+                        <Select.Item value="none">none</Select.Item>
+                        <Select.Item value="low">low</Select.Item>
+                        <Select.Item value="medium">medium</Select.Item>
+                        <Select.Item value="high">high</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  </Box>
+
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="inputMethod">
+                      入力方式
+                    </Text>
+                    <Select.Root
+                      value={form.inputMethod}
+                      onValueChange={(v) => handleChange("inputMethod", v as InputMethod)}
+                    >
+                      <Select.Trigger id="inputMethod" style={{ width: "100%" }} />
+                      <Select.Content>
+                        <Select.Item value="clipboard">クリップボード（Ctrl+V）</Select.Item>
+                        <Select.Item value="keystroke">キーストローク（直接入力）</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                    <Text size="1" color="gray" mt="1" as="p">
+                      クリップボード: 安定だがターミナルで折りたたまれる場合あり。キーストローク: ターミナル向きだがアプリによっては不安定。
+                    </Text>
+                  </Box>
+
+                  {saveStatus === "saved" && (
+                    <Callout.Root color="green" variant="soft" role="status">
+                      <Callout.Text>保存しました</Callout.Text>
+                    </Callout.Root>
+                  )}
+
+                  {testStatus === "ok" && (
+                    <Callout.Root color="green" variant="soft" role="status">
+                      <Callout.Text>{testMessage}</Callout.Text>
+                    </Callout.Root>
+                  )}
+
+                  {testStatus === "error" && (
+                    <Callout.Root color="red" variant="soft" role="alert">
+                      <Callout.Text>{testMessage}</Callout.Text>
+                    </Callout.Root>
+                  )}
                 </Flex>
+              </Tabs.Content>
 
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="reasoningEffort">
-                    Reasoning Effort（後処理AI）
+              <Tabs.Content value="prompt">
+                <Flex className="tab-content" direction="column" gap="2" pt="4">
+                  <Text as="label" className="field-label" htmlFor="postprocessPrompt">
+                    フォーマット用プロンプト
                   </Text>
-                  <Select.Root
-                    value={form.reasoningEffort}
-                    onValueChange={(v) => handleChange("reasoningEffort", v as ReasoningEffort)}
-                  >
-                    <Select.Trigger id="reasoningEffort" style={{ width: "100%" }} />
-                    <Select.Content>
-                      <Select.Item value="none">none</Select.Item>
-                      <Select.Item value="low">low</Select.Item>
-                      <Select.Item value="medium">medium</Select.Item>
-                      <Select.Item value="high">high</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </Box>
-
-                <Box>
-                  <Text as="label" className="field-label" htmlFor="inputMethod">
-                    入力方式
-                  </Text>
-                  <Select.Root
-                    value={form.inputMethod}
-                    onValueChange={(v) => handleChange("inputMethod", v as InputMethod)}
-                  >
-                    <Select.Trigger id="inputMethod" style={{ width: "100%" }} />
-                    <Select.Content>
-                      <Select.Item value="clipboard">クリップボード（Ctrl+V）</Select.Item>
-                      <Select.Item value="keystroke">キーストローク（直接入力）</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                  <Text size="1" color="gray" mt="1" as="p">
-                    クリップボード: 安定だがターミナルで折りたたまれる場合あり。キーストローク: ターミナル向きだがアプリによっては不安定。
-                  </Text>
-                </Box>
-
-                {saveStatus === "saved" && (
-                  <Callout.Root color="green" variant="soft" role="status">
-                    <Callout.Text>保存しました</Callout.Text>
-                  </Callout.Root>
-                )}
-
-                {testStatus === "ok" && (
-                  <Callout.Root color="green" variant="soft" role="status">
-                    <Callout.Text>{testMessage}</Callout.Text>
-                  </Callout.Root>
-                )}
-
-                {testStatus === "error" && (
-                  <Callout.Root color="red" variant="soft" role="alert">
-                    <Callout.Text>{testMessage}</Callout.Text>
-                  </Callout.Root>
-                )}
-              </Flex>
-
-              <Flex className="settings-column settings-column-prompt" direction="column" gap="2">
-                <Text as="label" className="field-label" htmlFor="postprocessPrompt">
-                  フォーマット用プロンプト
-                </Text>
-                <TextArea
-                  className="prompt-textarea"
-                  id="postprocessPrompt"
-                  value={form.postprocessPrompt}
-                  onChange={(e) => handleChange("postprocessPrompt", e.target.value)}
-                  rows={18}
-                  placeholder="後処理時に system role として渡すプロンプト"
-                />
-              </Flex>
-            </div>
+                  <TextArea
+                    className="prompt-textarea"
+                    id="postprocessPrompt"
+                    value={form.postprocessPrompt}
+                    onChange={(e) => handleChange("postprocessPrompt", e.target.value)}
+                    rows={18}
+                    placeholder="後処理時に system role として渡すプロンプト"
+                  />
+                </Flex>
+              </Tabs.Content>
+            </Tabs.Root>
 
             <Flex className="settings-actions" gap="3">
               <Button

@@ -29,31 +29,20 @@ body {
 }
 
 .settings-card {
-  width: min(1120px, 100%);
+  width: min(680px, 100%);
   border: none;
   box-shadow: none;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: none;
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(420px, 1fr);
-  gap: 20px;
-  align-items: stretch;
-}
-
-.settings-column {
-  min-width: 0;
-}
-
-.settings-column-prompt {
-  min-height: 0;
+.tab-content {
+  min-height: 600px;
 }
 
 .prompt-textarea {
   flex: 1;
-  min-height: 500px;
+  min-height: 400px;
   resize: none;
 }
 
@@ -81,23 +70,4 @@ body {
 
 .field-note p + p {
   margin-top: 4px;
-}
-
-@media (max-width: 720px) {
-  .settings-shell {
-    padding: 16px;
-  }
-
-  .settings-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .prompt-textarea {
-    min-height: 320px;
-    resize: vertical;
-  }
-
-  .field-half {
-    min-width: 0;
-  }
 }

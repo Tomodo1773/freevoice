@@ -14,8 +14,8 @@
         "label": "main",
         "url": "index.html",
         "title": "FreeVoice 設定",
-        "width": 1160,
-        "height": 760,
+        "width": 720,
+        "height": 950,
         "visible": false,
         "decorations": true,
         "resizable": false
