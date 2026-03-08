@@ -51,26 +51,9 @@ export default function App() {
   const [shortcutHint, setShortcutHint] = useState("");
 
   useEffect(() => {
-    (async () => {
-      const key = await getApiKey();
-      if (key) {
-        setApiKeyInput(key);
-      } else {
-        // localStorage からのマイグレーション
-        try {
-          const stored = localStorage.getItem("freevoice-settings");
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            if (parsed.apiKey) {
-              await setApiKey(parsed.apiKey);
-              setApiKeyInput(parsed.apiKey);
-              delete parsed.apiKey;
-              localStorage.setItem("freevoice-settings", JSON.stringify(parsed));
-            }
-          }
-        } catch { /* ignore */ }
-      }
-    })();
+    getApiKey().then((key) => {
+      if (key) setApiKeyInput(key);
+    });
   }, []);
 
   const handleChange = (field: keyof AppSettings, value: string) => {

@@ -12,17 +12,7 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        return normalizeSettings(JSON.parse(stored) as Partial<AppSettings>);
-      }
-    } catch {
-      // ignore
-    }
-    return DEFAULT_SETTINGS;
-  });
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
 
   const saveSettings = (next: AppSettings) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
