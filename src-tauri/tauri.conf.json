@@ -53,6 +53,6 @@
     ]
   },
   "plugins": {
-    "store": {}
+    "store": null
   }
 }
