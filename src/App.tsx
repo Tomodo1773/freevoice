@@ -17,7 +17,7 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import { useSettings } from "./useSettings";
-import { AppSettings, ReasoningEffort } from "./types";
+import { AppSettings, InputMethod, ReasoningEffort } from "./types";
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
@@ -295,6 +295,25 @@ export default function App() {
                       <Select.Item value="high">high</Select.Item>
                     </Select.Content>
                   </Select.Root>
+                </Box>
+
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="inputMethod">
+                    入力方式
+                  </Text>
+                  <Select.Root
+                    value={form.inputMethod}
+                    onValueChange={(v) => handleChange("inputMethod", v as InputMethod)}
+                  >
+                    <Select.Trigger id="inputMethod" style={{ width: "100%" }} />
+                    <Select.Content>
+                      <Select.Item value="clipboard">クリップボード（Ctrl+V）</Select.Item>
+                      <Select.Item value="keystroke">キーストローク（直接入力）</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                  <Text size="1" color="gray" mt="1" as="p">
+                    クリップボード: 安定だがターミナルで折りたたまれる場合あり。キーストローク: ターミナル向きだがアプリによっては不安定。
+                  </Text>
                 </Box>
 
                 {saveStatus === "saved" && (
