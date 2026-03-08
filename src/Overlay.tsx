@@ -210,7 +210,7 @@ export default function Overlay() {
       );
       formattedText = formatted;
 
-      await invoke("paste_text", { text: formatted });
+      await invoke("paste_text", { text: formatted, method: settings.inputMethod });
       setStatus("done");
       scheduleHide(1000);
     } catch (e) {

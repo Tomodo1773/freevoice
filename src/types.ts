@@ -2,6 +2,8 @@ export type OverlayStatus = "listening" | "transcribing" | "formatting" | "done"
 
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
+export type InputMethod = "clipboard" | "keystroke";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
@@ -11,6 +13,7 @@ export interface AppSettings {
   postprocessPrompt: string;
   logFolder: string;
   reasoningEffort: ReasoningEffort;
+  inputMethod: InputMethod;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -39,4 +42,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
 `,
   logFolder: "",
   reasoningEffort: "low",
+  inputMethod: "clipboard",
 };

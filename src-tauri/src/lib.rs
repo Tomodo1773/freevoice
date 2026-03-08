@@ -12,24 +12,30 @@ struct AppShortcutState {
 }
 
 #[tauri::command]
-async fn paste_text(text: String) -> Result<(), String> {
+async fn paste_text(text: String, method: String) -> Result<(), String> {
     std::thread::spawn(move || {
-        use enigo::{Direction, Keyboard, Key};
+        if method == "keystroke" {
+            use enigo::Keyboard;
+            let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+            enigo.text(&text).map_err(|e| e.to_string())
+        } else {
+            use enigo::{Direction, Keyboard, Key};
 
-        // クリップボードにテキストをセット
-        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        clipboard.set_text(&text).map_err(|e| e.to_string())?;
+            // クリップボードにテキストをセット
+            let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+            clipboard.set_text(&text).map_err(|e| e.to_string())?;
 
-        // クリップボードが確実にセットされるまで待機
-        std::thread::sleep(std::time::Duration::from_millis(50));
+            // クリップボードが確実にセットされるまで待機
+            std::thread::sleep(std::time::Duration::from_millis(50));
 
-        // Ctrl+V を送信
-        let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
-        enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-        enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
-        enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
+            // Ctrl+V を送信
+            let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+            enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
+            enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+            enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
 
-        Ok(())
+            Ok(())
+        }
     })
     .join()
     .map_err(|_| "スレッドパニック".to_string())?
