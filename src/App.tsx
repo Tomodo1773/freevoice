@@ -364,12 +364,6 @@ export default function App() {
                     </Text>
                   </Box>
 
-                  {saveStatus === "saved" && (
-                    <Callout.Root color="green" variant="soft" role="status">
-                      <Callout.Text>保存しました</Callout.Text>
-                    </Callout.Root>
-                  )}
-
                   {testStatus === "ok" && (
                     <Callout.Root color="green" variant="soft" role="status">
                       <Callout.Text>{testMessage}</Callout.Text>
@@ -400,6 +394,12 @@ export default function App() {
                 </Flex>
               </Tabs.Content>
             </Tabs.Root>
+
+            {saveStatus === "saved" && (
+              <Callout.Root color="green" variant="soft" role="status">
+                <Callout.Text>保存しました</Callout.Text>
+              </Callout.Root>
+            )}
 
             <Flex className="settings-actions" gap="3">
               <Button
