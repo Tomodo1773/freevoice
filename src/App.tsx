@@ -1,6 +1,7 @@
 import { KeyboardEvent, useEffect, useState } from "react";
 import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
+import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { getApiKey, setApiKey } from "./apiKeyStore";
 import {
   Badge,
@@ -12,6 +13,7 @@ import {
   Heading,
   Select,
   Separator,
+  Switch,
   Tabs,
   Text,
   TextArea,
@@ -50,11 +52,13 @@ export default function App() {
   const [isCapturingShortcut, setIsCapturingShortcut] = useState(false);
   const [isManualInput, setIsManualInput] = useState(false);
   const [shortcutHint, setShortcutHint] = useState("");
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
 
   useEffect(() => {
     getApiKey().then((key) => {
       if (key) setApiKeyInput(key);
     });
+    isEnabled().then(setAutostartEnabled).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -319,6 +323,26 @@ export default function App() {
                         <Select.Item value="high">high</Select.Item>
                       </Select.Content>
                     </Select.Root>
+                  </Box>
+
+                  <Box>
+                    <Text as="label" className="field-label">
+                      スタートアップ
+                    </Text>
+                    <Flex align="center" gap="2">
+                      <Switch
+                        checked={autostartEnabled}
+                        onCheckedChange={async (checked) => {
+                          try {
+                            if (checked) await enable(); else await disable();
+                            setAutostartEnabled(checked);
+                          } catch (e) {
+                            console.error("スタートアップ設定失敗:", e);
+                          }
+                        }}
+                      />
+                      <Text size="2" color="gray">Windows 起動時に自動起動する</Text>
+                    </Flex>
                   </Box>
 
                   <Box>

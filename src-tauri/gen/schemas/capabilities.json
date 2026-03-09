@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for FreeVoice","local":true,"windows":["main","overlay"],"permissions":["core:default","core:window:allow-show","core:window:allow-hide","store:default"]}}
+{"default":{"identifier":"default","description":"Default capabilities for FreeVoice","local":true,"windows":["main","overlay"],"permissions":["core:default","core:window:allow-show","core:window:allow-hide","store:default","autostart:allow-enable","autostart:allow-disable","autostart:allow-is-enabled"]}}
