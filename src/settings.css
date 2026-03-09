@@ -12,6 +12,7 @@ body,
 }
 
 body {
+  overflow-y: auto;
   font-family: "Aptos", "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif;
   background:
     radial-gradient(circle at 8% 12%, rgba(95, 197, 255, 0.18), transparent 35%),
@@ -21,7 +22,6 @@ body {
 }
 
 .settings-shell {
-  min-height: 100vh;
   padding: 16px;
   display: flex;
   align-items: flex-start;
@@ -37,7 +37,6 @@ body {
 }
 
 .tab-content {
-  min-height: 600px;
 }
 
 .prompt-textarea {
