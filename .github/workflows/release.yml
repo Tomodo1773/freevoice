@@ -23,6 +23,20 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Set version from tag
+        run: |
+          node -e "
+            const fs = require('fs');
+            const ver = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            for (const f of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const obj = JSON.parse(fs.readFileSync(f, 'utf8'));
+              obj.version = ver;
+              fs.writeFileSync(f, JSON.stringify(obj, null, 2) + '\n');
+            }
+            const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
+            fs.writeFileSync('src-tauri/Cargo.toml', cargo.replace(/^version = \".*\"/m, \`version = \"\${ver}\"\`));
+          "
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
