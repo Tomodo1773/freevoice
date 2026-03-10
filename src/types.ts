@@ -4,8 +4,11 @@ export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type InputMethod = "clipboard" | "keystroke";
 
+export type ApiProvider = "azure" | "openai";
+
 export interface AppSettings {
   shortcut: string;
+  provider: ApiProvider;
   endpoint: string;
   transcriptionModel: string;
   postprocessModel: string;
@@ -17,6 +20,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   shortcut: "Ctrl+Shift+Space",
+  provider: "azure",
   endpoint: "",
   transcriptionModel: "gpt-4o-transcribe",
   postprocessModel: "gpt-5.2",

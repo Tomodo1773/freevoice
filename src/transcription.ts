@@ -1,4 +1,5 @@
-import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
+import { buildTranscriptionUrl, buildAuthHeaders } from "./apiEndpoint";
+import { ApiProvider } from "./types";
 
 function pickMimeType(): string {
   const candidates = [
@@ -27,16 +28,18 @@ export class TranscriptionSession {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private peakAudioLevel = 0;
+  private provider: ApiProvider = "azure";
   private endpoint = "";
   private apiKey = "";
   private model = "";
 
-  async start(endpoint: string, apiKey: string, model: string): Promise<void> {
+  async start(provider: ApiProvider, endpoint: string, apiKey: string, model: string): Promise<void> {
+    this.provider = provider;
     this.endpoint = endpoint;
     this.apiKey = apiKey;
     this.model = model;
 
-    if (!this.endpoint) throw new Error("endpoint が未設定です");
+    if (this.provider === "azure" && !this.endpoint) throw new Error("endpoint が未設定です");
     if (!this.apiKey) throw new Error("apiKey が未設定です");
     if (!this.model) throw new Error("transcriptionModel が未設定です");
 
@@ -109,12 +112,10 @@ export class TranscriptionSession {
     form.append("model", this.model);
     form.append("file", blob, `recording.${extensionForMimeType(mimeType)}`);
 
-    const transcriptionUrl = buildAzureTranscriptionUrl(this.endpoint, this.model);
+    const transcriptionUrl = buildTranscriptionUrl(this.provider, this.endpoint);
     const res = await fetch(transcriptionUrl, {
       method: "POST",
-      headers: {
-        "api-key": this.apiKey,
-      },
+      headers: buildAuthHeaders(this.provider, this.apiKey),
       body: form,
     });
 

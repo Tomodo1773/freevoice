@@ -1,8 +1,9 @@
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
-import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
+import { buildChatCompletionsUrl, buildAuthHeaders } from "./apiEndpoint";
+import { ApiProvider, DEFAULT_SETTINGS, ReasoningEffort } from "./types";
 
 export async function postprocess(
   transcript: string,
+  provider: ApiProvider,
   endpoint: string,
   apiKey: string,
   model: string,
@@ -12,15 +13,16 @@ export async function postprocess(
   if (!transcript.trim()) return transcript;
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
 
-  const url = buildAzureChatCompletionsUrl(endpoint, model);
+  const url = buildChatCompletionsUrl(provider, endpoint);
 
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "api-key": apiKey,
+      ...buildAuthHeaders(provider, apiKey),
     },
     body: JSON.stringify({
+      model,
       messages: [
         {
           role: "system",

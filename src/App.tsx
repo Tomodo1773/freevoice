@@ -21,11 +21,11 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import { useSettings } from "./useSettings";
-import { AppSettings, InputMethod, ReasoningEffort } from "./types";
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
+import { AppSettings, ApiProvider, InputMethod, ReasoningEffort } from "./types";
+import { buildChatCompletionsUrl, buildAuthHeaders } from "./apiEndpoint";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
-const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
+const ENDPOINT_SAMPLE = "https://your-resource.openai.azure.com";
 
 const CODE_TO_KEY: Record<string, string> = {
   Space: "Space", Enter: "Enter", Tab: "Tab",
@@ -89,14 +89,15 @@ export default function App() {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const url = buildAzureChatCompletionsUrl(form.endpoint, form.postprocessModel);
+      const url = buildChatCompletionsUrl(form.provider, form.endpoint);
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "api-key": apiKeyInput,
+          ...buildAuthHeaders(form.provider, apiKeyInput),
         },
         body: JSON.stringify({
+          model: form.postprocessModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
           reasoning_effort: "none",
@@ -235,24 +236,37 @@ export default function App() {
                   </Box>
 
                   <Box>
-                    <Text as="label" className="field-label" htmlFor="endpoint">
-                      Microsoft Foundry エンドポイント
+                    <Text as="label" className="field-label" htmlFor="provider">
+                      API プロバイダー
                     </Text>
-                    <TextField.Root
-                      id="endpoint"
-                      value={form.endpoint}
-                      onChange={(e) => handleChange("endpoint", e.target.value)}
-                      placeholder={ENDPOINT_SAMPLE}
-                    />
-                    <Box className="field-note">
-                      <Text as="p" size="1" color="gray">
-                        Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
+                    <Select.Root
+                      value={form.provider}
+                      onValueChange={(v) => handleChange("provider", v as ApiProvider)}
+                    >
+                      <Select.Trigger id="provider" style={{ width: "100%" }} />
+                      <Select.Content>
+                        <Select.Item value="azure">Azure (Microsoft Foundry)</Select.Item>
+                        <Select.Item value="openai">OpenAI</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  </Box>
+
+                  {form.provider === "azure" && (
+                    <Box>
+                      <Text as="label" className="field-label" htmlFor="endpoint">
+                        Azure エンドポイント
                       </Text>
-                      <Text as="p" size="1" color="gray">
+                      <TextField.Root
+                        id="endpoint"
+                        value={form.endpoint}
+                        onChange={(e) => handleChange("endpoint", e.target.value)}
+                        placeholder={ENDPOINT_SAMPLE}
+                      />
+                      <Text as="p" size="1" color="gray" mt="1">
                         例: {ENDPOINT_SAMPLE}
                       </Text>
                     </Box>
-                  </Box>
+                  )}
 
                   <Box>
                     <Text as="label" className="field-label" htmlFor="apiKey">
@@ -405,7 +419,7 @@ export default function App() {
               <Button
                 variant="soft"
                 onClick={handleTest}
-                disabled={testStatus === "testing" || !form.endpoint || !apiKeyInput}
+                disabled={testStatus === "testing" || (form.provider === "azure" && !form.endpoint) || !apiKeyInput}
               >
                 {testStatus === "testing" ? "テスト中..." : "接続テスト"}
               </Button>
