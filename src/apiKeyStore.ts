@@ -21,3 +21,4 @@ export async function setApiKey(key: string): Promise<void> {
   const store = await getStore();
   await store.set(API_KEY_KEY, key);
 }
+

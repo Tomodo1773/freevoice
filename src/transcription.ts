@@ -1,4 +1,6 @@
+import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
+import { TranscriptionProvider } from "./types";
 
 function pickMimeType(): string {
   const candidates = [
@@ -27,19 +29,39 @@ export class TranscriptionSession {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private peakAudioLevel = 0;
+  private provider: TranscriptionProvider = "azure-openai";
   private endpoint = "";
   private apiKey = "";
   private model = "";
+  private speechEndpoint = "";
+  private speechLanguage = "";
+  private recognizer: SpeechSDK.SpeechRecognizer | null = null;
+  private recognizedTexts: string[] = [];
 
-  async start(endpoint: string, apiKey: string, model: string): Promise<void> {
-    this.endpoint = endpoint;
-    this.apiKey = apiKey;
-    this.model = model;
+  async start(params: {
+    provider: TranscriptionProvider;
+    endpoint: string;
+    apiKey: string;
+    model: string;
+    speechEndpoint: string;
+    speechLanguage: string;
+  }): Promise<void> {
+    this.provider = params.provider;
+    this.endpoint = params.endpoint;
+    this.apiKey = params.apiKey;
+    this.model = params.model;
+    this.speechEndpoint = params.speechEndpoint;
+    this.speechLanguage = params.speechLanguage;
 
-    if (!this.endpoint) throw new Error("endpoint が未設定です");
     if (!this.apiKey) throw new Error("apiKey が未設定です");
-    if (!this.model) throw new Error("transcriptionModel が未設定です");
+    if (this.provider === "azure-openai") {
+      if (!this.endpoint) throw new Error("endpoint が未設定です");
+      if (!this.model) throw new Error("transcriptionModel が未設定です");
+    } else {
+      if (!this.speechEndpoint) throw new Error("Speech エンドポイントが未設定です");
+    }
 
+    // 全プロバイダー共通: VU メーター用にマイク取得
     this.mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -47,17 +69,40 @@ export class TranscriptionSession {
         echoCancellation: true,
       },
     });
-
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 1024;
     this.analyser.smoothingTimeConstant = 0.7;
     source.connect(this.analyser);
+    this.peakAudioLevel = 0;
+
+    if (this.provider === "azure-speech") {
+      this.recognizedTexts = [];
+      const speechConfig = SpeechSDK.SpeechConfig.fromEndpoint(
+        new URL(this.speechEndpoint),
+        this.apiKey
+      );
+      speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
+      const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+      this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+      this.recognizer.recognized = (_, e) => {
+        if (
+          e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
+          e.result.text
+        ) {
+          this.recognizedTexts.push(e.result.text);
+        }
+      };
+      const recognizer = this.recognizer;
+      await new Promise<void>((resolve, reject) => {
+        recognizer.startContinuousRecognitionAsync(resolve, reject);
+      });
+      return;
+    }
 
     const mimeType = pickMimeType();
     this.chunks = [];
-    this.peakAudioLevel = 0;
     this.mediaRecorder = mimeType
       ? new MediaRecorder(this.mediaStream, { mimeType })
       : new MediaRecorder(this.mediaStream);
@@ -79,31 +124,56 @@ export class TranscriptionSession {
   }
 
   async stop(): Promise<string> {
-    const recorder = this.mediaRecorder;
-    if (!recorder) throw new Error("録音セッションが開始されていません");
+    // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
 
-    await new Promise<void>((resolve) => {
-      const finalize = () => resolve();
-      recorder.addEventListener("stop", finalize, { once: true });
-      recorder.stop();
-    });
+    if (this.provider === "azure-speech") {
+      // SDK を先に停止してからストリームを解放
+      if (this.recognizer) {
+        const recognizer = this.recognizer;
+        await new Promise<void>((resolve, reject) => {
+          recognizer.stopContinuousRecognitionAsync(resolve, reject);
+        });
+        recognizer.close();
+        this.recognizer = null;
+      }
+      this.mediaStream?.getTracks().forEach((track) => track.stop());
+      this.mediaStream = null;
+      this.analyser = null;
+      if (this.audioContext) {
+        await this.audioContext.close().catch(() => {});
+        this.audioContext = null;
+      }
+      if (this.peakAudioLevel < 0.2) return "";
+      return this.recognizedTexts.join("");
+    }
 
+    // azure-openai パス
     this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
-    this.mediaRecorder = null;
     this.analyser = null;
     if (this.audioContext) {
       await this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
 
+    const recorder = this.mediaRecorder;
+    if (!recorder) throw new Error("録音セッションが開始されていません");
+
+    await new Promise<void>((resolve) => {
+      recorder.addEventListener("stop", () => resolve(), { once: true });
+      recorder.stop();
+    });
+
+    this.mediaRecorder = null;
+
+    if (this.peakAudioLevel < 0.2) return "";
+
     const mimeType = recorder.mimeType || "audio/webm";
     const blob = new Blob(this.chunks, { type: mimeType });
     this.chunks = [];
 
     if (blob.size === 0) return "";
-    if (this.peakAudioLevel < 0.2) return "";
 
     const form = new FormData();
     form.append("model", this.model);

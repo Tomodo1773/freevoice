@@ -4,6 +4,8 @@ export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type InputMethod = "clipboard" | "keystroke";
 
+export type TranscriptionProvider = "azure-openai" | "azure-speech";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
@@ -13,6 +15,9 @@ export interface AppSettings {
   logFolder: string;
   reasoningEffort: ReasoningEffort;
   inputMethod: InputMethod;
+  transcriptionProvider: TranscriptionProvider;
+  speechEndpoint: string;
+  speechLanguage: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -41,4 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   logFolder: "",
   reasoningEffort: "low",
   inputMethod: "clipboard",
+  transcriptionProvider: "azure-openai",
+  speechEndpoint: "",
+  speechLanguage: "ja-JP",
 };

@@ -21,7 +21,7 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import { useSettings } from "./useSettings";
-import { AppSettings, InputMethod, ReasoningEffort } from "./types";
+import { AppSettings, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
@@ -55,9 +55,7 @@ export default function App() {
   const [autostartEnabled, setAutostartEnabled] = useState(false);
 
   useEffect(() => {
-    getApiKey().then((key) => {
-      if (key) setApiKeyInput(key);
-    });
+    getApiKey().then((key) => { if (key) setApiKeyInput(key); });
     isEnabled().then(setAutostartEnabled).catch(() => {});
   }, []);
 
@@ -235,6 +233,22 @@ export default function App() {
                   </Box>
 
                   <Box>
+                    <Text as="label" className="field-label" htmlFor="transcriptionProvider">
+                      文字起こしプロバイダー
+                    </Text>
+                    <Select.Root
+                      value={form.transcriptionProvider}
+                      onValueChange={(v) => handleChange("transcriptionProvider", v as TranscriptionProvider)}
+                    >
+                      <Select.Trigger id="transcriptionProvider" style={{ width: "100%" }} />
+                      <Select.Content>
+                        <Select.Item value="azure-openai">Microsoft Foundry (GPT-4o transcribe)</Select.Item>
+                        <Select.Item value="azure-speech">Microsoft Foundry (Azure AI Speech)</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  </Box>
+
+                  <Box>
                     <Text as="label" className="field-label" htmlFor="endpoint">
                       Microsoft Foundry エンドポイント
                     </Text>
@@ -267,6 +281,37 @@ export default function App() {
                     />
                   </Box>
 
+                  {form.transcriptionProvider === "azure-speech" && (
+                    <>
+                      <Box>
+                        <Text as="label" className="field-label" htmlFor="speechEndpoint">
+                          Speech エンドポイント
+                        </Text>
+                        <TextField.Root
+                          id="speechEndpoint"
+                          value={form.speechEndpoint}
+                          onChange={(e) => handleChange("speechEndpoint", e.target.value)}
+                          placeholder="例: https://eastus2.stt.speech.microsoft.com"
+                        />
+                        <Text size="1" color="gray" mt="1" as="p">
+                          Foundry プロジェクトのリージョンに合わせたエンドポイントを入力してください。API Key は上記と同じものを使用します。
+                        </Text>
+                      </Box>
+
+                      <Box>
+                        <Text as="label" className="field-label" htmlFor="speechLanguage">
+                          言語
+                        </Text>
+                        <TextField.Root
+                          id="speechLanguage"
+                          value={form.speechLanguage}
+                          onChange={(e) => handleChange("speechLanguage", e.target.value)}
+                          placeholder="例: ja-JP"
+                        />
+                      </Box>
+                    </>
+                  )}
+
                   <Box>
                     <Text as="label" className="field-label" htmlFor="logFolder">
                       ログ保存フォルダー
@@ -283,18 +328,20 @@ export default function App() {
                   </Box>
 
                   <Flex gap="4">
-                    <Box className="field-half">
-                      <Text as="label" className="field-label" htmlFor="transcriptionModel">
-                        文字起こしモデル
-                      </Text>
-                      <TextField.Root
-                        id="transcriptionModel"
-                        value={form.transcriptionModel}
-                        onChange={(e) => handleChange("transcriptionModel", e.target.value)}
-                        placeholder="gpt-4o-transcribe"
-                      />
-                    </Box>
-                    <Box className="field-half">
+                    {form.transcriptionProvider === "azure-openai" && (
+                      <Box className="field-half">
+                        <Text as="label" className="field-label" htmlFor="transcriptionModel">
+                          文字起こしモデル
+                        </Text>
+                        <TextField.Root
+                          id="transcriptionModel"
+                          value={form.transcriptionModel}
+                          onChange={(e) => handleChange("transcriptionModel", e.target.value)}
+                          placeholder="gpt-4o-transcribe"
+                        />
+                      </Box>
+                    )}
+                    <Box className={form.transcriptionProvider === "azure-openai" ? "field-half" : ""}>
                       <Text as="label" className="field-label" htmlFor="postprocessModel">
                         後処理モデル
                       </Text>

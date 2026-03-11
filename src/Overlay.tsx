@@ -44,9 +44,12 @@ async function saveLogEntry(
   data: { transcription: string; formatted: string; error?: string }
 ): Promise<void> {
   const isoTimestamp = now.toISOString();
-  const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
+  const datePart = isoTimestamp.slice(0, 10); // YYYY-MM-DD
+  const timePart = isoTimestamp.slice(11).replace(/:/g, "-").replace(/\./g, "-"); // HH-MM-SS-mmmZ
+  const folder = `${logFolder}/${datePart}`;
+  const filename = `freevoice-${timePart}.json`;
   const content = JSON.stringify({ timestamp: isoTimestamp, ...data }, null, 2);
-  await invoke("save_log", { folder: logFolder, filename, content });
+  await invoke("save_log", { folder, filename, content });
 }
 
 async function trySaveLog(
@@ -70,10 +73,22 @@ export default function Overlay() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
   const sessionRef = useRef<TranscriptionSession | null>(null);
+  const isStartingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
+    // 古いログフォルダを起動時にクリーンアップ
+    (async () => {
+      try {
+        const settings = loadSettings();
+        const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
+        await invoke("cleanup_old_logs", { folder: logFolder, keepDays: 30 });
+      } catch (e) {
+        console.error("[FreeVoice] cleanup_old_logs failed", e);
+      }
+    })();
+
     const appWindow = getCurrentWebviewWindow();
     appWindow.setFocusable(false).catch(() => {});
     invoke("set_click_through").catch(() => {});
@@ -142,6 +157,10 @@ export default function Overlay() {
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
+    // 多重起動ガード（最初の await より前に同期的にセット）
+    if (isStartingRef.current || sessionRef.current) return;
+    isStartingRef.current = true;
+
     const now = new Date();
     // 録音開始音
     const ctx = new AudioContext();
@@ -176,8 +195,16 @@ export default function Overlay() {
     sessionRef.current = session;
 
     try {
-      await session.start(settings.endpoint, apiKey, settings.transcriptionModel);
+      await session.start({
+        provider: settings.transcriptionProvider,
+        endpoint: settings.endpoint,
+        apiKey,
+        model: settings.transcriptionModel,
+        speechEndpoint: settings.speechEndpoint,
+        speechLanguage: settings.speechLanguage,
+      });
     } catch (e) {
+      isStartingRef.current = false;
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
       setErrorMsg(toUserMessage(e));
@@ -187,11 +214,14 @@ export default function Overlay() {
   };
 
   const handleStop = async () => {
-    const settings = loadSettings();
-    const apiKey = await getApiKey();
+    // await より前にフラグとセッションを退避・クリア（多重起動対策）
+    isStartingRef.current = false;
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
+
+    const settings = loadSettings();
+    const apiKey = await getApiKey();
 
     const now = new Date();
     let rawTranscript = "";
