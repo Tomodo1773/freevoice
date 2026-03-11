@@ -53,15 +53,15 @@ export class TranscriptionSession {
     this.speechEndpoint = params.speechEndpoint;
     this.speechLanguage = params.speechLanguage;
 
+    if (!this.apiKey) throw new Error("apiKey が未設定です");
     if (this.provider === "azure-openai") {
       if (!this.endpoint) throw new Error("endpoint が未設定です");
-      if (!this.apiKey) throw new Error("apiKey が未設定です");
       if (!this.model) throw new Error("transcriptionModel が未設定です");
     } else {
-      if (!this.apiKey) throw new Error("apiKey が未設定です");
       if (!this.speechEndpoint) throw new Error("Speech エンドポイントが未設定です");
     }
 
+    // 全プロバイダー共通: VU メーター用にマイク取得
     this.mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -69,14 +69,12 @@ export class TranscriptionSession {
         echoCancellation: true,
       },
     });
-
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 1024;
     this.analyser.smoothingTimeConstant = 0.7;
     source.connect(this.analyser);
-
     this.peakAudioLevel = 0;
 
     if (this.provider === "azure-speech") {
@@ -88,7 +86,6 @@ export class TranscriptionSession {
       speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
       const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
       this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-
       this.recognizer.recognized = (_, e) => {
         if (
           e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
@@ -97,21 +94,22 @@ export class TranscriptionSession {
           this.recognizedTexts.push(e.result.text);
         }
       };
-
+      const recognizer = this.recognizer;
       await new Promise<void>((resolve, reject) => {
-        this.recognizer!.startContinuousRecognitionAsync(resolve, reject);
+        recognizer.startContinuousRecognitionAsync(resolve, reject);
       });
-    } else {
-      const mimeType = pickMimeType();
-      this.chunks = [];
-      this.mediaRecorder = mimeType
-        ? new MediaRecorder(this.mediaStream, { mimeType })
-        : new MediaRecorder(this.mediaStream);
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) this.chunks.push(event.data);
-      };
-      this.mediaRecorder.start(250);
+      return;
     }
+
+    const mimeType = pickMimeType();
+    this.chunks = [];
+    this.mediaRecorder = mimeType
+      ? new MediaRecorder(this.mediaStream, { mimeType })
+      : new MediaRecorder(this.mediaStream);
+    this.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) this.chunks.push(event.data);
+    };
+    this.mediaRecorder.start(250);
   }
 
   getAudioLevel(): number {
@@ -126,8 +124,31 @@ export class TranscriptionSession {
   }
 
   async stop(): Promise<string> {
+    // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
 
+    if (this.provider === "azure-speech") {
+      // SDK を先に停止してからストリームを解放
+      if (this.recognizer) {
+        const recognizer = this.recognizer;
+        await new Promise<void>((resolve, reject) => {
+          recognizer.stopContinuousRecognitionAsync(resolve, reject);
+        });
+        recognizer.close();
+        this.recognizer = null;
+      }
+      this.mediaStream?.getTracks().forEach((track) => track.stop());
+      this.mediaStream = null;
+      this.analyser = null;
+      if (this.audioContext) {
+        await this.audioContext.close().catch(() => {});
+        this.audioContext = null;
+      }
+      if (this.peakAudioLevel < 0.2) return "";
+      return this.recognizedTexts.join("");
+    }
+
+    // azure-openai パス
     this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
     this.analyser = null;
@@ -136,21 +157,6 @@ export class TranscriptionSession {
       this.audioContext = null;
     }
 
-    if (this.provider === "azure-speech") {
-      if (this.recognizer) {
-        await new Promise<void>((resolve, reject) => {
-          this.recognizer!.stopContinuousRecognitionAsync(resolve, reject);
-        });
-        this.recognizer.close();
-        this.recognizer = null;
-      }
-
-      if (this.peakAudioLevel < 0.2) return "";
-
-      return this.recognizedTexts.join("");
-    }
-
-    // azure-openai パス
     const recorder = this.mediaRecorder;
     if (!recorder) throw new Error("録音セッションが開始されていません");
 
