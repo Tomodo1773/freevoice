@@ -78,6 +78,8 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const cachedApiKeyRef = useRef("");
+  const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
     // 古いログフォルダを起動時にクリーンアップ
@@ -180,6 +182,8 @@ export default function Overlay() {
 
     const settings = loadSettings();
     const apiKey = await getApiKey();
+    cachedSettingsRef.current = settings;
+    cachedApiKeyRef.current = apiKey;
     setStatus("listening");
     setTranscript("");
     setErrorMsg("");
@@ -189,9 +193,20 @@ export default function Overlay() {
     silentSinceRef.current = null;
 
     const appWindow = getCurrentWebviewWindow();
-    await appWindow.setFocusable(false).catch(() => {});
-    await invoke("position_overlay").catch(() => {});
-    await appWindow.show();
+
+    // オーバーレイ表示と getUserMedia を並列実行（100-300ms短縮）
+    const [, mediaStream] = await Promise.all([
+      (async () => {
+        await Promise.all([
+          appWindow.setFocusable(false).catch(() => {}),
+          invoke("position_overlay").catch(() => {}),
+        ]);
+        await appWindow.show();
+      })(),
+      navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, noiseSuppression: true, echoCancellation: true },
+      }),
+    ]);
 
     const session = new TranscriptionSession();
     sessionRef.current = session;
@@ -204,6 +219,7 @@ export default function Overlay() {
         model: settings.transcriptionModel,
         speechEndpoint: settings.speechEndpoint,
         speechLanguage: settings.speechLanguage,
+        mediaStream,
       });
     } catch (e) {
       isStartingRef.current = false;
@@ -240,8 +256,8 @@ export default function Overlay() {
     if (!session) return;
     sessionRef.current = null;
 
-    const settings = loadSettings();
-    const apiKey = await getApiKey();
+    const settings = cachedSettingsRef.current;
+    const apiKey = cachedApiKeyRef.current;
 
     const now = new Date();
     let rawTranscript = "";
@@ -250,7 +266,7 @@ export default function Overlay() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    await registerEscCancel(controller);
+    registerEscCancel(controller);
 
     setStatus("transcribing");
 

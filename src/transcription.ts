@@ -1,4 +1,4 @@
-import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
+import type * as SpeechSDKTypes from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 import { TranscriptionProvider } from "./types";
 
@@ -35,7 +35,7 @@ export class TranscriptionSession {
   private model = "";
   private speechEndpoint = "";
   private speechLanguage = "";
-  private recognizer: SpeechSDK.SpeechRecognizer | null = null;
+  private recognizer: SpeechSDKTypes.SpeechRecognizer | null = null;
   private recognizedTexts: string[] = [];
 
   async start(params: {
@@ -45,6 +45,7 @@ export class TranscriptionSession {
     model: string;
     speechEndpoint: string;
     speechLanguage: string;
+    mediaStream?: MediaStream;
   }): Promise<void> {
     this.provider = params.provider;
     this.endpoint = params.endpoint;
@@ -61,8 +62,8 @@ export class TranscriptionSession {
       if (!this.speechEndpoint) throw new Error("Speech エンドポイントが未設定です");
     }
 
-    // 全プロバイダー共通: VU メーター用にマイク取得
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+    // 全プロバイダー共通: VU メーター用にマイク取得（外部から渡された場合は再利用）
+    this.mediaStream = params.mediaStream ?? await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         noiseSuppression: true,
@@ -78,6 +79,7 @@ export class TranscriptionSession {
     this.peakAudioLevel = 0;
 
     if (this.provider === "azure-speech") {
+      const SpeechSDK = await import("microsoft-cognitiveservices-speech-sdk");
       this.recognizedTexts = [];
       const speechConfig = SpeechSDK.SpeechConfig.fromEndpoint(
         new URL(this.speechEndpoint),
