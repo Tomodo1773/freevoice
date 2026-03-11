@@ -73,6 +73,7 @@ export default function Overlay() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
   const sessionRef = useRef<TranscriptionSession | null>(null);
+  const isStartingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
 
@@ -156,6 +157,10 @@ export default function Overlay() {
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
+    // 多重起動ガード（最初の await より前に同期的にセット）
+    if (isStartingRef.current || sessionRef.current) return;
+    isStartingRef.current = true;
+
     const now = new Date();
     // 録音開始音
     const ctx = new AudioContext();
@@ -199,6 +204,7 @@ export default function Overlay() {
         speechLanguage: settings.speechLanguage,
       });
     } catch (e) {
+      isStartingRef.current = false;
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
       setErrorMsg(toUserMessage(e));
@@ -208,11 +214,14 @@ export default function Overlay() {
   };
 
   const handleStop = async () => {
-    const settings = loadSettings();
-    const apiKey = await getApiKey();
+    // await より前にフラグとセッションを退避・クリア（多重起動対策）
+    isStartingRef.current = false;
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
+
+    const settings = loadSettings();
+    const apiKey = await getApiKey();
 
     const now = new Date();
     let rawTranscript = "";
