@@ -176,7 +176,14 @@ export default function Overlay() {
     sessionRef.current = session;
 
     try {
-      await session.start(settings.endpoint, apiKey, settings.transcriptionModel);
+      await session.start({
+        provider: settings.transcriptionProvider,
+        endpoint: settings.endpoint,
+        apiKey,
+        model: settings.transcriptionModel,
+        speechEndpoint: settings.speechEndpoint,
+        speechLanguage: settings.speechLanguage,
+      });
     } catch (e) {
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
