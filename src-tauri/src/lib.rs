@@ -113,6 +113,36 @@ fn save_log(folder: String, filename: String, content: String) -> Result<(), Str
 }
 
 #[tauri::command]
+fn cleanup_old_logs(folder: String, keep_days: u64) -> Result<(), String> {
+    let dir = std::path::Path::new(&folder);
+    if !dir.exists() {
+        return Ok(());
+    }
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(keep_days * 24 * 60 * 60);
+    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // YYYY-MM-DD 形式のフォルダのみ対象
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.len() != 10 || !name.chars().nth(4).is_some_and(|c| c == '-') {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if let Ok(modified) = meta.modified() {
+                if modified < cutoff {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
     app.path()
         .app_local_data_dir()
@@ -228,6 +258,7 @@ pub fn run() {
             update_shortcut,
             save_log,
             get_app_log_dir,
+            cleanup_old_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

@@ -44,9 +44,12 @@ async function saveLogEntry(
   data: { transcription: string; formatted: string; error?: string }
 ): Promise<void> {
   const isoTimestamp = now.toISOString();
-  const filename = `freevoice-${isoTimestamp.replace(/:/g, "-").replace(/\./g, "-")}.json`;
+  const datePart = isoTimestamp.slice(0, 10); // YYYY-MM-DD
+  const timePart = isoTimestamp.slice(11).replace(/:/g, "-").replace(/\./g, "-"); // HH-MM-SS-mmmZ
+  const folder = `${logFolder}/${datePart}`;
+  const filename = `freevoice-${timePart}.json`;
   const content = JSON.stringify({ timestamp: isoTimestamp, ...data }, null, 2);
-  await invoke("save_log", { folder: logFolder, filename, content });
+  await invoke("save_log", { folder, filename, content });
 }
 
 async function trySaveLog(
@@ -74,6 +77,17 @@ export default function Overlay() {
   const silentSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
+    // 古いログフォルダを起動時にクリーンアップ
+    (async () => {
+      try {
+        const settings = loadSettings();
+        const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
+        await invoke("cleanup_old_logs", { folder: logFolder, keepDays: 30 });
+      } catch (e) {
+        console.error("[FreeVoice] cleanup_old_logs failed", e);
+      }
+    })();
+
     const appWindow = getCurrentWebviewWindow();
     appWindow.setFocusable(false).catch(() => {});
     invoke("set_click_through").catch(() => {});
