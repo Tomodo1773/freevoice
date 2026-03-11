@@ -123,7 +123,7 @@ export class TranscriptionSession {
     return level;
   }
 
-  async stop(): Promise<string> {
+  async stop(signal?: AbortSignal): Promise<string> {
     // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
 
@@ -186,6 +186,7 @@ export class TranscriptionSession {
         "api-key": this.apiKey,
       },
       body: form,
+      signal,
     });
 
     if (!res.ok) {

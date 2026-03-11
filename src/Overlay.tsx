@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { TranscriptionSession } from "./transcription";
 import { postprocess } from "./postprocess";
 import { loadSettings } from "./useSettings";
@@ -76,6 +77,7 @@ export default function Overlay() {
   const isStartingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // 古いログフォルダを起動時にクリーンアップ
@@ -213,6 +215,24 @@ export default function Overlay() {
     }
   };
 
+  const registerEscCancel = async (controller: AbortController) => {
+    try {
+      await register("Escape", () => {
+        controller.abort();
+      });
+    } catch {
+      // ショートカット登録失敗は無視（キャンセル機能が使えないだけ）
+    }
+  };
+
+  const unregisterEsc = async () => {
+    try {
+      await unregister("Escape");
+    } catch {
+      // 解除失敗は無視
+    }
+  };
+
   const handleStop = async () => {
     // await より前にフラグとセッションを退避・クリア（多重起動対策）
     isStartingRef.current = false;
@@ -228,11 +248,17 @@ export default function Overlay() {
     let formattedText = "";
     let stopError: unknown = null;
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    await registerEscCancel(controller);
+
     setStatus("transcribing");
 
     try {
-      const raw = await session.stop();
+      const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
+        await unregisterEsc();
+        abortRef.current = null;
         scheduleHide(150);
         return;
       }
@@ -246,7 +272,8 @@ export default function Overlay() {
         apiKey,
         settings.postprocessModel,
         settings.postprocessPrompt,
-        settings.reasoningEffort
+        settings.reasoningEffort,
+        controller.signal
       );
       formattedText = formatted;
 
@@ -254,12 +281,19 @@ export default function Overlay() {
       setStatus("done");
       scheduleHide(1000);
     } catch (e) {
+      // AbortError はキャンセルなのでエラー扱いしない
+      if (e instanceof DOMException && e.name === "AbortError") {
+        scheduleHide(0);
+        return;
+      }
       stopError = e;
       console.error("[FreeVoice] handleStop failed", e);
       setStatus("error");
       setErrorMsg(toUserMessage(e));
       scheduleHide(5000);
     } finally {
+      await unregisterEsc();
+      abortRef.current = null;
       const configuredFolder = settings.logFolder.trim();
       const hasError = stopError !== null && formattedText === "";
       // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
