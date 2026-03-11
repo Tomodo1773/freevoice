@@ -7,7 +7,8 @@ export async function postprocess(
   apiKey: string,
   model: string,
   prompt: string,
-  reasoningEffort: ReasoningEffort
+  reasoningEffort: ReasoningEffort,
+  signal?: AbortSignal
 ): Promise<string> {
   if (!transcript.trim()) return transcript;
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
@@ -33,6 +34,7 @@ export async function postprocess(
       ],
       reasoning_effort: reasoningEffort,
     }),
+    signal,
   });
 
   if (!res.ok) {
