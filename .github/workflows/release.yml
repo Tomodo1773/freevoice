@@ -24,6 +24,7 @@ jobs:
         run: npm ci
 
       - name: Set version from tag
+        shell: bash
         run: |
           node -e "
             const fs = require('fs');
