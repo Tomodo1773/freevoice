@@ -94,7 +94,7 @@ fn position_overlay(window: WebviewWindow) -> Result<(), String> {
         let size = monitor.size();
         let scale = monitor.scale_factor();
         let win_width = 600.0_f64;
-        let win_height = 80.0_f64;
+        let win_height = 200.0_f64;
         // モニター中央下部に配置（物理座標）
         let x = pos.x as f64 + size.width as f64 / 2.0 - win_width * scale / 2.0;
         let y = pos.y as f64 + size.height as f64 - (win_height + 60.0) * scale;
