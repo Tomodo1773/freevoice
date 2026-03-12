@@ -73,6 +73,7 @@ export default function Overlay() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
   const sessionRef = useRef<TranscriptionSession | null>(null);
+  const realtimeTextRef = useRef<HTMLSpanElement>(null);
   const isStartingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
@@ -157,6 +158,13 @@ export default function Overlay() {
     };
   }, [status]);
 
+  // リアルタイムテキスト末尾を常に表示
+  useEffect(() => {
+    if (realtimeTextRef.current) {
+      realtimeTextRef.current.scrollTop = realtimeTextRef.current.scrollHeight;
+    }
+  }, [transcript]);
+
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
@@ -224,6 +232,7 @@ export default function Overlay() {
         speechEndpoint: settings.speechEndpoint,
         speechLanguage: settings.speechLanguage,
         mediaStream,
+        onInterimResult: (text) => setTranscript(text),
       });
     } catch (e) {
       isStartingRef.current = false;
@@ -380,7 +389,10 @@ export default function Overlay() {
               />
             </span>
           )}
-          <span className={`overlay-text ${status === "error" ? "overlay-text-error" : ""}`}>
+          <span
+            ref={status === "listening" && transcript ? realtimeTextRef : undefined}
+            className={`overlay-text${status === "error" ? " overlay-text-error" : ""}${status === "listening" && transcript ? " overlay-text-realtime" : ""}`}
+          >
             {text}
           </span>
         </div>

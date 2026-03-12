@@ -47,6 +47,7 @@ export class TranscriptionSession {
     speechEndpoint: string;
     speechLanguage: string;
     mediaStream?: MediaStream;
+    onInterimResult?: (text: string) => void;
   }): Promise<void> {
     this.provider = params.provider;
     this.endpoint = params.endpoint;
@@ -89,12 +90,18 @@ export class TranscriptionSession {
       speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
       const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
       this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+      this.recognizer.recognizing = (_, e) => {
+        if (e.result.text) {
+          params.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
+        }
+      };
       this.recognizer.recognized = (_, e) => {
         if (
           e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
           e.result.text
         ) {
           this.recognizedTexts.push(e.result.text);
+          params.onInterimResult?.(this.recognizedTexts.join(""));
         }
       };
       const recognizer = this.recognizer;
