@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { TranscriptionSession } from "./transcription";
 import { postprocess } from "./postprocess";
 import { loadSettings } from "./useSettings";
@@ -161,6 +160,11 @@ export default function Overlay() {
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
+    // 処理中（transcribing/formatting）なら abort してキャンセル
+    if (abortRef.current) {
+      abortRef.current.abort();
+      return;
+    }
     // 多重起動ガード（最初の await より前に同期的にセット）
     if (isStartingRef.current || sessionRef.current) return;
     isStartingRef.current = true;
@@ -231,24 +235,6 @@ export default function Overlay() {
     }
   };
 
-  const registerEscCancel = async (controller: AbortController) => {
-    try {
-      await register("Escape", () => {
-        controller.abort();
-      });
-    } catch {
-      // ショートカット登録失敗は無視（キャンセル機能が使えないだけ）
-    }
-  };
-
-  const unregisterEsc = async () => {
-    try {
-      await unregister("Escape");
-    } catch {
-      // 解除失敗は無視
-    }
-  };
-
   const handleStop = async () => {
     // await より前にフラグとセッションを退避・クリア（多重起動対策）
     isStartingRef.current = false;
@@ -266,14 +252,11 @@ export default function Overlay() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    registerEscCancel(controller);
-
     setStatus("transcribing");
 
     try {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
-        await unregisterEsc();
         abortRef.current = null;
         scheduleHide(150);
         return;
@@ -297,9 +280,12 @@ export default function Overlay() {
       setStatus("done");
       scheduleHide(1000);
     } catch (e) {
-      // AbortError はキャンセルなのでエラー扱いしない
+      // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
-        scheduleHide(0);
+        const appWindow = getCurrentWebviewWindow();
+        await appWindow.hide();
+        setStatus("listening");
+        setTranscript("");
         return;
       }
       stopError = e;
@@ -308,7 +294,6 @@ export default function Overlay() {
       setErrorMsg(toUserMessage(e));
       scheduleHide(5000);
     } finally {
-      await unregisterEsc();
       abortRef.current = null;
       const configuredFolder = settings.logFolder.trim();
       const hasError = stopError !== null && formattedText === "";
