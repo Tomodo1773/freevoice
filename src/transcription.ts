@@ -29,6 +29,7 @@ export class TranscriptionSession {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private peakAudioLevel = 0;
+  private static readonly SILENCE_THRESHOLD = 0.2;
   private provider: TranscriptionProvider = "azure-openai";
   private endpoint = "";
   private apiKey = "";
@@ -125,6 +126,10 @@ export class TranscriptionSession {
     return level;
   }
 
+  get wasSilent(): boolean {
+    return this.peakAudioLevel < TranscriptionSession.SILENCE_THRESHOLD;
+  }
+
   async stop(signal?: AbortSignal): Promise<string> {
     // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
@@ -146,7 +151,7 @@ export class TranscriptionSession {
         await this.audioContext.close().catch(() => {});
         this.audioContext = null;
       }
-      if (this.peakAudioLevel < 0.2) return "";
+      if (this.wasSilent) return "";
       return this.recognizedTexts.join("");
     }
 
@@ -169,7 +174,7 @@ export class TranscriptionSession {
 
     this.mediaRecorder = null;
 
-    if (this.peakAudioLevel < 0.2) return "";
+    if (this.wasSilent) return "";
 
     const mimeType = recorder.mimeType || "audio/webm";
     const blob = new Blob(this.chunks, { type: mimeType });

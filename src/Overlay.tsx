@@ -258,7 +258,13 @@ export default function Overlay() {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
         abortRef.current = null;
-        scheduleHide(150);
+        if (session.wasSilent) {
+          setStatus("listening");
+          setTranscript("音声が検出されませんでした");
+          scheduleHide(1500);
+        } else {
+          scheduleHide(150);
+        }
         return;
       }
 
