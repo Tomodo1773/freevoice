@@ -146,7 +146,10 @@ export class TranscriptionSession {
         await this.audioContext.close().catch(() => {});
         this.audioContext = null;
       }
-      if (this.peakAudioLevel < 0.2) return "";
+      if (this.peakAudioLevel < 0.03) {
+        console.warn(`[FreeVoice] skip: peakAudioLevel=${this.peakAudioLevel.toFixed(3)} (threshold=0.03)`);
+        return "";
+      }
       return this.recognizedTexts.join("");
     }
 
@@ -169,7 +172,10 @@ export class TranscriptionSession {
 
     this.mediaRecorder = null;
 
-    if (this.peakAudioLevel < 0.2) return "";
+    if (this.peakAudioLevel < 0.03) {
+      console.warn(`[FreeVoice] skip: peakAudioLevel=${this.peakAudioLevel.toFixed(3)} (threshold=0.03)`);
+      return "";
+    }
 
     const mimeType = recorder.mimeType || "audio/webm";
     const blob = new Blob(this.chunks, { type: mimeType });
