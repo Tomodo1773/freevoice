@@ -223,6 +223,8 @@ export default function Overlay() {
     const session = new TranscriptionSession();
     sessionRef.current = session;
 
+    invoke("mute_system_audio").catch((e: unknown) => console.warn("mute failed", e));
+
     try {
       await session.start({
         provider: settings.transcriptionProvider,
@@ -236,6 +238,7 @@ export default function Overlay() {
       });
     } catch (e) {
       isStartingRef.current = false;
+      invoke("unmute_system_audio").catch(() => {});
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
       setErrorMsg(toUserMessage(e));
@@ -250,6 +253,8 @@ export default function Overlay() {
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
+
+    invoke("unmute_system_audio").catch((e: unknown) => console.warn("unmute failed", e));
 
     const settings = cachedSettingsRef.current;
     const apiKey = cachedApiKeyRef.current;
