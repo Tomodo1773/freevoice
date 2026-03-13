@@ -220,6 +220,43 @@ async fn update_shortcut(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+unsafe fn set_system_mute(mute: bool) -> Result<(), String> {
+    use windows::Win32::Media::Audio::*;
+    use windows::Win32::System::Com::*;
+
+    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    let enumerator: IMMDeviceEnumerator =
+        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+    let device = enumerator
+        .GetDefaultAudioEndpoint(eRender, eConsole)
+        .map_err(|e| e.to_string())?;
+    let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).map_err(|e| e.to_string())?;
+    volume
+        .SetMute(mute, std::ptr::null())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn mute_system_audio() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        set_system_mute(true)
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}
+
+#[tauri::command]
+fn unmute_system_audio() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        set_system_mute(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
@@ -290,6 +327,10 @@ pub fn run() {
                     }
                 })?;
 
+            // クラッシュ後の再起動時にミュートが残らないよう解除
+            #[cfg(target_os = "windows")]
+            let _ = unsafe { set_system_mute(false) };
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -301,6 +342,8 @@ pub fn run() {
             read_logs,
             get_app_log_dir,
             cleanup_old_logs,
+            mute_system_audio,
+            unmute_system_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");
