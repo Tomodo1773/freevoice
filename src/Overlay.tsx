@@ -313,7 +313,7 @@ export default function Overlay() {
       const configuredFolder = settings.logFolder.trim();
       const hasError = stopError !== null && formattedText === "";
       // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
-      if ((rawTranscript && configuredFolder) || hasError) {
+      if (rawTranscript || hasError) {
         await trySaveLog(configuredFolder, now, {
           transcription: rawTranscript,
           formatted: formattedText,

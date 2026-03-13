@@ -143,6 +143,47 @@ fn cleanup_old_logs(folder: String, keep_days: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn read_logs(folder: String, limit: usize) -> Result<Vec<String>, String> {
+    let dir = std::path::Path::new(&folder);
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    // 日付フォルダを降順で走査
+    let mut date_dirs: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .collect();
+    date_dirs.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+
+    let mut results = Vec::new();
+    for date_dir in date_dirs {
+        if results.len() >= limit {
+            break;
+        }
+        let mut files: Vec<_> = std::fs::read_dir(date_dir.path())
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "json")
+            })
+            .collect();
+        files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        for file in files {
+            if results.len() >= limit {
+                break;
+            }
+            if let Ok(content) = std::fs::read_to_string(file.path()) {
+                results.push(content);
+            }
+        }
+    }
+    Ok(results)
+}
+
+#[tauri::command]
 fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
     app.path()
         .app_local_data_dir()
@@ -257,6 +298,7 @@ pub fn run() {
             position_overlay,
             update_shortcut,
             save_log,
+            read_logs,
             get_app_log_dir,
             cleanup_old_logs,
         ])

@@ -14,11 +14,12 @@
         "label": "main",
         "url": "index.html",
         "title": "FreeVoice 設定",
-        "width": 720,
+        "width": 900,
         "height": 700,
+        "minWidth": 800,
         "visible": false,
         "decorations": true,
-        "resizable": false
+        "resizable": true
       },
       {
         "label": "overlay",
