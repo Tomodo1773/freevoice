@@ -18,6 +18,7 @@ export interface AppSettings {
   transcriptionProvider: TranscriptionProvider;
   speechEndpoint: string;
   speechLanguage: string;
+  audioDeviceId: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -49,4 +50,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptionProvider: "azure-openai",
   speechEndpoint: "",
   speechLanguage: "ja-JP",
+  audioDeviceId: "",
 };

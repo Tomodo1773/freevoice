@@ -51,6 +51,7 @@ export default function App() {
   const [isManualInput, setIsManualInput] = useState(false);
   const [shortcutHint, setShortcutHint] = useState("");
   const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [page, setPage] = useState<"basic" | "model" | "prompt" | "history">("basic");
   const [version, setVersion] = useState("");
 
@@ -58,6 +59,9 @@ export default function App() {
     getApiKey().then((key) => { if (key) setApiKeyInput(key); });
     isEnabled().then(setAutostartEnabled).catch(() => {});
     getVersion().then(setVersion);
+    navigator.mediaDevices.enumerateDevices().then((devices) => {
+      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -252,6 +256,29 @@ export default function App() {
                 />
                 <Text size="1" color="gray" mt="1">
                   空欄の場合、%LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
+                </Text>
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="audioDeviceId">
+                  マイクデバイス
+                </Text>
+                <Select.Root
+                  value={form.audioDeviceId}
+                  onValueChange={(v) => handleChange("audioDeviceId", v)}
+                >
+                  <Select.Trigger id="audioDeviceId" style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="">デフォルト</Select.Item>
+                    {audioDevices.map((d) => (
+                      <Select.Item key={d.deviceId} value={d.deviceId}>
+                        {d.label || `マイク (${d.deviceId.slice(0, 8)}...)`}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+                <Text size="1" color="gray" mt="1" as="p">
+                  システム音声が混入する場合は、使用するマイクを明示的に選択してください。
                 </Text>
               </Box>
 
