@@ -221,7 +221,7 @@ async fn update_shortcut(
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn set_system_mute(mute: bool) -> Result<(), String> {
+unsafe fn set_mute_raw(mute: bool) -> Result<(), String> {
     use windows::Win32::Media::Audio::*;
     use windows::Win32::System::Com::*;
 
@@ -238,16 +238,14 @@ unsafe fn set_system_mute(mute: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[allow(unused_variables)]
 fn set_system_audio_mute(mute: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     unsafe {
-        set_system_mute(mute)
+        set_mute_raw(mute)
     }
     #[cfg(not(target_os = "windows"))]
-    {
-        let _ = mute;
-        Ok(())
-    }
+    Ok(())
 }
 
 pub fn run() {
