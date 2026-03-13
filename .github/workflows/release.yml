@@ -46,6 +46,25 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Generate release notes
+        id: changelog
+        shell: bash
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            LOG=$(git log --pretty=format:'- %s' "$PREV_TAG"..HEAD --no-merges)
+          else
+            LOG=$(git log --pretty=format:'- %s' --no-merges)
+          fi
+          # Multi-line output to GITHUB_OUTPUT
+          {
+            echo "body<<EOF"
+            echo "## What's Changed"
+            echo ""
+            echo "$LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build & Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -53,7 +72,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Release ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download this version.'
+          releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: '--target x86_64-pc-windows-msvc'
