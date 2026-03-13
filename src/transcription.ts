@@ -46,6 +46,7 @@ export class TranscriptionSession {
     model: string;
     speechEndpoint: string;
     speechLanguage: string;
+    audioDeviceId?: string;
     mediaStream?: MediaStream;
     onInterimResult?: (text: string) => void;
   }): Promise<void> {
@@ -70,6 +71,7 @@ export class TranscriptionSession {
         channelCount: 1,
         noiseSuppression: true,
         echoCancellation: true,
+        ...(params.audioDeviceId ? { deviceId: { exact: params.audioDeviceId } } : {}),
       },
     });
     this.audioContext = new AudioContext();
@@ -88,7 +90,9 @@ export class TranscriptionSession {
         this.apiKey
       );
       speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
-      const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+      const audioConfig = params.audioDeviceId
+        ? SpeechSDK.AudioConfig.fromMicrophoneInput(params.audioDeviceId)
+        : SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
       this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
       this.recognizer.recognizing = (_, e) => {
         if (e.result.text) {

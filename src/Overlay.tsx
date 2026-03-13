@@ -216,7 +216,12 @@ export default function Overlay() {
         await appWindow.show();
       })(),
       navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, noiseSuppression: true, echoCancellation: true },
+        audio: {
+          channelCount: 1,
+          noiseSuppression: true,
+          echoCancellation: true,
+          ...(settings.audioDeviceId ? { deviceId: { exact: settings.audioDeviceId } } : {}),
+        },
       }),
     ]);
 
@@ -231,6 +236,7 @@ export default function Overlay() {
         model: settings.transcriptionModel,
         speechEndpoint: settings.speechEndpoint,
         speechLanguage: settings.speechLanguage,
+        audioDeviceId: settings.audioDeviceId,
         mediaStream,
         onInterimResult: (text) => setTranscript(text),
       });
