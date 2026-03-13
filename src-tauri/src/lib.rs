@@ -221,7 +221,7 @@ async fn update_shortcut(
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn set_system_mute(mute: bool) -> Result<(), String> {
+unsafe fn set_mute_raw(mute: bool) -> Result<(), String> {
     use windows::Win32::Media::Audio::*;
     use windows::Win32::System::Com::*;
 
@@ -238,20 +238,11 @@ unsafe fn set_system_mute(mute: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn mute_system_audio() -> Result<(), String> {
+#[allow(unused_variables)]
+fn set_system_audio_mute(mute: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     unsafe {
-        set_system_mute(true)
-    }
-    #[cfg(not(target_os = "windows"))]
-    Ok(())
-}
-
-#[tauri::command]
-fn unmute_system_audio() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        set_system_mute(false)
+        set_mute_raw(mute)
     }
     #[cfg(not(target_os = "windows"))]
     Ok(())
@@ -342,8 +333,7 @@ pub fn run() {
             read_logs,
             get_app_log_dir,
             cleanup_old_logs,
-            mute_system_audio,
-            unmute_system_audio,
+            set_system_audio_mute,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

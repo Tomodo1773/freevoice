@@ -228,7 +228,7 @@ export default function Overlay() {
     const session = new TranscriptionSession();
     sessionRef.current = session;
 
-    invoke("mute_system_audio").catch((e: unknown) => console.warn("mute failed", e));
+    invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) => console.warn("mute failed", e));
 
     try {
       await session.start({
@@ -244,7 +244,7 @@ export default function Overlay() {
       });
     } catch (e) {
       isStartingRef.current = false;
-      invoke("unmute_system_audio").catch(() => {});
+      invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
       console.error("[FreeVoice] handleStart failed", e);
       setStatus("error");
       setErrorMsg(toUserMessage(e));
@@ -260,7 +260,7 @@ export default function Overlay() {
     if (!session) return;
     sessionRef.current = null;
 
-    invoke("unmute_system_audio").catch((e: unknown) => console.warn("unmute failed", e));
+    invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
 
     const settings = cachedSettingsRef.current;
     const apiKey = cachedApiKeyRef.current;
