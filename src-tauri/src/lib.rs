@@ -223,6 +223,7 @@ async fn update_shortcut(
 #[cfg(target_os = "windows")]
 unsafe fn set_mute_raw(mute: bool) -> Result<(), String> {
     use windows::Win32::Media::Audio::*;
+    use windows::Win32::Media::Audio::Endpoints::*;
     use windows::Win32::System::Com::*;
 
     let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -320,7 +321,7 @@ pub fn run() {
 
             // クラッシュ後の再起動時にミュートが残らないよう解除
             #[cfg(target_os = "windows")]
-            let _ = unsafe { set_system_mute(false) };
+            let _ = unsafe { set_mute_raw(false) };
 
             Ok(())
         })

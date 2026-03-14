@@ -26,5 +26,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 windows = { version = "0.61", features = [
   "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
   "Win32_System_Com",
 ] }
