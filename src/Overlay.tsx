@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useReducer, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -6,7 +6,7 @@ import { TranscriptionSession } from "./transcription";
 import { postprocess } from "./postprocess";
 import { loadSettings } from "./useSettings";
 import { getApiKey } from "./apiKeyStore";
-import { OverlayStatus } from "./types";
+import { overlayReducer, initialState } from "./overlayReducer";
 
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -66,20 +66,17 @@ async function trySaveLog(
 }
 
 export default function Overlay() {
-  const [status, setStatus] = useState<OverlayStatus>("listening");
-  const [transcript, setTranscript] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [fading, setFading] = useState(false);
+  const [state, dispatch] = useReducer(overlayReducer, initialState);
+  const { phase, transcript, errorMsg, fading, hideRequest } = state;
+
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
+
   const sessionRef = useRef<TranscriptionSession | null>(null);
   const realtimeTextRef = useRef<HTMLSpanElement>(null);
-  const isStartingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedSettingsRef = useRef(loadSettings());
 
@@ -131,10 +128,11 @@ export default function Overlay() {
     };
   }, []);
 
+  // VUメーター更新ループ
   useEffect(() => {
     const tick = () => {
       const s = sessionRef.current;
-      if (status === "listening" && s) {
+      if (phase === "recording" && s) {
         const lvl = s.getAudioLevel();
         setAudioLevel(lvl);
 
@@ -158,7 +156,7 @@ export default function Overlay() {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [status]);
+  }, [phase]);
 
   // リアルタイムテキスト末尾を常に表示
   useEffect(() => {
@@ -169,16 +167,40 @@ export default function Overlay() {
 
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
+  // hideRequest を監視してフェード開始タイマーを起動
+  useEffect(() => {
+    if (!hideRequest) return;
+
+    const timer = setTimeout(() => {
+      dispatch({ type: "BEGIN_FADE" });
+    }, hideRequest.ms);
+
+    return () => clearTimeout(timer);
+  }, [hideRequest?.seq]);
+
+  // fading 開始後、400ms でウィンドウを非表示にしてリセット
+  useEffect(() => {
+    if (!fading) return;
+
+    const timer = setTimeout(async () => {
+      const appWindow = getCurrentWebviewWindow();
+      await appWindow.hide();
+      dispatch({ type: "FADE_DONE" });
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [fading]);
+
   const handleStart = async () => {
     // 処理中（transcribing/formatting）なら abort してキャンセル
     if (abortRef.current) {
       abortRef.current.abort();
       return;
     }
-    // 多重起動ガード（最初の await より前に同期的にセット）
-    if (isStartingRef.current || sessionRef.current) return;
-    isStartingRef.current = true;
-    cancelScheduledHide();
+    // 多重起動ガード（最初の await より前に同期的にチェック）
+    if (sessionRef.current) return;
+
+    dispatch({ type: "RECORDING_START" });
 
     const now = new Date();
     // 録音開始音
@@ -199,10 +221,6 @@ export default function Overlay() {
     const apiKey = await getApiKey();
     cachedSettingsRef.current = settings;
     cachedApiKeyRef.current = apiKey;
-    setStatus("listening");
-    setTranscript("");
-    setErrorMsg("");
-    setFading(false);
     setAudioLevel(0);
     setSilentWarn(false);
     silentSinceRef.current = null;
@@ -243,22 +261,19 @@ export default function Overlay() {
         speechLanguage: settings.speechLanguage,
         audioDeviceId: settings.audioDeviceId,
         mediaStream,
-        onInterimResult: (text) => setTranscript(text),
+        onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
       });
     } catch (e) {
-      isStartingRef.current = false;
+      sessionRef.current = null;
       invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
       console.error("[FreeVoice] handleStart failed", e);
-      setStatus("error");
-      setErrorMsg(toUserMessage(e));
-      scheduleHide(5000);
+      dispatch({ type: "RECORDING_FAILED", errorMsg: toUserMessage(e) });
       await trySaveLog(settings.logFolder.trim(), now, { transcription: "", formatted: "", error: formatError(e) });
     }
   };
 
   const handleStop = async () => {
-    // await より前にフラグとセッションを退避・クリア（多重起動対策）
-    isStartingRef.current = false;
+    // await より前にセッションを退避・クリア（多重起動対策）
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
@@ -275,25 +290,18 @@ export default function Overlay() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    setStatus("transcribing");
+    dispatch({ type: "STOP_TRANSCRIBING" });
 
     try {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
         abortRef.current = null;
-        if (session.wasSilent) {
-          setStatus("listening");
-          setTranscript("音声が検出されませんでした");
-          scheduleHide(1500);
-        } else {
-          scheduleHide(150);
-        }
+        dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
         return;
       }
 
       rawTranscript = raw;
-      setTranscript(raw);
-      setStatus("formatting");
+      dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
       const formatted = await postprocess(
         raw,
         settings.endpoint,
@@ -306,22 +314,18 @@ export default function Overlay() {
       formattedText = formatted;
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
-      setStatus("done");
-      scheduleHide(1000);
+      dispatch({ type: "FORMAT_DONE" });
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
-        setStatus("listening");
-        setTranscript("");
+        dispatch({ type: "ABORT_CANCELLED" });
         return;
       }
       stopError = e;
       console.error("[FreeVoice] handleStop failed", e);
-      setStatus("error");
-      setErrorMsg(toUserMessage(e));
-      scheduleHide(5000);
+      dispatch({ type: "STOP_ERROR", errorMsg: toUserMessage(e) });
     } finally {
       abortRef.current = null;
       const configuredFolder = settings.logFolder.trim();
@@ -337,60 +341,48 @@ export default function Overlay() {
     }
   };
 
-  const cancelScheduledHide = () => {
-    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
-    if (fadeTimerRef.current) { clearTimeout(fadeTimerRef.current); fadeTimerRef.current = null; }
-  };
-
-  const scheduleHide = (ms: number) => {
-    cancelScheduledHide();
-    hideTimerRef.current = setTimeout(async () => {
-      hideTimerRef.current = null;
-      setFading(true);
-      fadeTimerRef.current = setTimeout(async () => {
-        fadeTimerRef.current = null;
-        const appWindow = getCurrentWebviewWindow();
-        await appWindow.hide();
-        setFading(false);
-        setStatus("listening");
-        setTranscript("");
-      }, 400);
-    }, ms);
-  };
+  // phase から既存 CSS クラス名へのマッピング（CSS変更不要にする）
+  const cssStatus =
+    phase === "recording" ? "listening" :
+    phase === "idle" ? "listening" :
+    phase;
 
   const pillClass = [
     "overlay-pill",
-    `status-${status}`,
+    `status-${cssStatus}`,
     fading ? "fading" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   const icon =
-    status === "listening" ? "●" :
-    (status === "transcribing" || status === "formatting") ? <span className="spinner">◌</span> :
-    status === "done" ? "✓" :
-    "!";
+    phase === "recording" ? "●" :
+    (phase === "transcribing" || phase === "formatting") ? <span className="spinner">◌</span> :
+    phase === "done" ? "✓" :
+    phase === "error" ? "!" :
+    null;
 
   const statusLabel =
-    status === "listening"
+    phase === "recording"
       ? "Recording"
-      : status === "transcribing"
+      : phase === "transcribing"
       ? "Transcribing"
-      : status === "formatting"
+      : phase === "formatting"
       ? "Formatting"
-      : status === "done"
+      : phase === "done"
       ? "Done"
-      : "Error";
+      : phase === "error"
+      ? "Error"
+      : "";
 
   const text =
-    status === "listening"
+    phase === "recording"
       ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
-      : status === "transcribing"
+      : phase === "transcribing"
       ? "Transcribing..."
-      : status === "formatting"
+      : phase === "formatting"
       ? "Formatting..."
-      : status === "done"
+      : phase === "done"
       ? "Completed"
       : errorMsg;
 
@@ -403,7 +395,7 @@ export default function Overlay() {
           <span className="overlay-status">{statusLabel}</span>
         </div>
         <div className="overlay-body">
-          {status === "listening" && (
+          {phase === "recording" && (
             <span className="vu" aria-hidden="true">
               <span
                 className="vu-bar"
@@ -412,13 +404,13 @@ export default function Overlay() {
             </span>
           )}
           <span
-            ref={status === "listening" && transcript ? realtimeTextRef : undefined}
-            className={`overlay-text${status === "error" ? " overlay-text-error" : ""}${status === "listening" && transcript ? " overlay-text-realtime" : ""}`}
+            ref={phase === "recording" && transcript ? realtimeTextRef : undefined}
+            className={`overlay-text${phase === "error" ? " overlay-text-error" : ""}${phase === "recording" && transcript ? " overlay-text-realtime" : ""}`}
           >
             {text}
           </span>
         </div>
-        {status === "error" && (
+        {phase === "error" && (
           <span className="overlay-meta">
             詳細はログファイルに出力されています
           </span>
@@ -427,3 +419,4 @@ export default function Overlay() {
     </div>
   );
 }
+

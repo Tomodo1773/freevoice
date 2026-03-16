@@ -1,5 +1,3 @@
-export type OverlayStatus = "listening" | "transcribing" | "formatting" | "done" | "error";
-
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type InputMethod = "clipboard" | "keystroke";
