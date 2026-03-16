@@ -78,6 +78,8 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedSettingsRef = useRef(loadSettings());
 
@@ -176,6 +178,7 @@ export default function Overlay() {
     // 多重起動ガード（最初の await より前に同期的にセット）
     if (isStartingRef.current || sessionRef.current) return;
     isStartingRef.current = true;
+    cancelScheduledHide();
 
     const now = new Date();
     // 録音開始音
@@ -334,10 +337,18 @@ export default function Overlay() {
     }
   };
 
+  const cancelScheduledHide = () => {
+    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
+    if (fadeTimerRef.current) { clearTimeout(fadeTimerRef.current); fadeTimerRef.current = null; }
+  };
+
   const scheduleHide = (ms: number) => {
-    setTimeout(async () => {
+    cancelScheduledHide();
+    hideTimerRef.current = setTimeout(async () => {
+      hideTimerRef.current = null;
       setFading(true);
-      setTimeout(async () => {
+      fadeTimerRef.current = setTimeout(async () => {
+        fadeTimerRef.current = null;
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
         setFading(false);
