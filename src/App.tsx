@@ -264,12 +264,12 @@ export default function App() {
                   マイクデバイス
                 </Text>
                 <Select.Root
-                  value={form.audioDeviceId}
-                  onValueChange={(v) => handleChange("audioDeviceId", v)}
+                  value={form.audioDeviceId || "__default__"}
+                  onValueChange={(v) => handleChange("audioDeviceId", v === "__default__" ? "" : v)}
                 >
                   <Select.Trigger id="audioDeviceId" style={{ width: "100%" }} />
                   <Select.Content>
-                    <Select.Item value="">デフォルト</Select.Item>
+                    <Select.Item value="__default__">デフォルト</Select.Item>
                     {audioDevices.map((d) => (
                       <Select.Item key={d.deviceId} value={d.deviceId}>
                         {d.label || `マイク (${d.deviceId.slice(0, 8)}...)`}
