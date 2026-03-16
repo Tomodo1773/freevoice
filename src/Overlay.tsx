@@ -78,6 +78,8 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedSettingsRef = useRef(loadSettings());
 
@@ -168,8 +170,12 @@ export default function Overlay() {
   // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
 
   const handleStart = async () => {
+    // 前回の scheduleHide タイマーをキャンセル（連続使用で消えてしまう問題の防止）
+    cancelHide();
+
     // 処理中（transcribing/formatting）なら abort してキャンセル
-    if (abortRef.current) {
+    // ただし録音中（sessionRef あり）は誤キャンセル防止のためスキップ
+    if (abortRef.current && !sessionRef.current) {
       abortRef.current.abort();
       return;
     }
@@ -334,10 +340,25 @@ export default function Overlay() {
     }
   };
 
+  const cancelHide = () => {
+    if (hideTimerRef.current != null) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    if (fadeTimerRef.current != null) {
+      clearTimeout(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+    setFading(false);
+  };
+
   const scheduleHide = (ms: number) => {
-    setTimeout(async () => {
+    cancelHide();
+    hideTimerRef.current = setTimeout(async () => {
+      hideTimerRef.current = null;
       setFading(true);
-      setTimeout(async () => {
+      fadeTimerRef.current = setTimeout(async () => {
+        fadeTimerRef.current = null;
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
         setFading(false);
