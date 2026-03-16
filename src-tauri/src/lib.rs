@@ -260,12 +260,17 @@ pub fn run() {
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings_item, &quit])?;
+            let restart_item = MenuItem::with_id(app, "restart", "再起動", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&settings_item, &restart_item, &quit])?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "restart" => {
+                        let _ = app.global_shortcut().unregister_all();
+                        app.restart();
+                    }
                     "quit" => app.exit(0),
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
