@@ -53,12 +53,43 @@ describe("overlayReducer", () => {
       ]);
       expect(done.hideRequest).not.toBeNull();
 
-      // BEGIN_FADE が来る前に次の録音開始
+      // BEGIN_FADE が来る前に次の録音開始 → done から直接 recording へ
       const recording = overlayReducer(done, { type: "RECORDING_START" });
-      // hideRequest 有 = fading はまだだが、done phase で RECORDING_START は phase !== "idle" && !state.fading なので拒否される
-      // → fading 中のみ受付なので、BEGIN_FADE 後に再開始
-      // 実際の動作確認
-      expect(recording.phase).toBe("done"); // ガードで弾かれる
+      expect(recording.phase).toBe("recording");
+      expect(recording.hideRequest).toBeNull();
+      expect(recording.transcript).toBe("");
+    });
+
+    it("error → RECORDING_START → recording", () => {
+      const error = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "RECORDING_FAILED", errorMsg: "マイクエラー" },
+      ]);
+      expect(error.phase).toBe("error");
+
+      const recording = overlayReducer(error, { type: "RECORDING_START" });
+      expect(recording.phase).toBe("recording");
+      expect(recording.hideRequest).toBeNull();
+      expect(recording.errorMsg).toBe("");
+    });
+
+    it("transcribing → RECORDING_START は拒否", () => {
+      const transcribing = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+      ]);
+      const result = overlayReducer(transcribing, { type: "RECORDING_START" });
+      expect(result.phase).toBe("transcribing");
+    });
+
+    it("formatting → RECORDING_START は拒否", () => {
+      const formatting = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+        { type: "TRANSCRIPT_READY", transcript: "test" },
+      ]);
+      const result = overlayReducer(formatting, { type: "RECORDING_START" });
+      expect(result.phase).toBe("formatting");
     });
 
     it("fading 中の再録音が正しく動く", () => {
@@ -186,23 +217,18 @@ describe("overlayReducer", () => {
   });
 
   describe("hideRequest の seq がインクリメントされる", () => {
-    it("連続する hideRequest は異なる seq を持つ", () => {
+    it("同一フロー内で連続する hideRequest は seq がインクリメントされる", () => {
+      // RECORDING_START → STOP_TRANSCRIBING → TRANSCRIPT_EMPTY(silent) → seq=1
       const s1 = applyActions(initialState, [
         { type: "RECORDING_START" },
-        { type: "RECORDING_FAILED", errorMsg: "err1" },
-      ]);
-      const seq1 = s1.hideRequest!.seq;
-
-      // idle に戻して再度エラー
-      const s2 = applyActions(initialState, [
-        { type: "RECORDING_START" },
         { type: "STOP_TRANSCRIBING" },
-        { type: "STOP_ERROR", errorMsg: "err2" },
+        { type: "TRANSCRIPT_EMPTY", silent: true },
       ]);
-      const seq2 = s2.hideRequest!.seq;
+      expect(s1.hideRequest!.seq).toBe(1);
 
-      expect(seq1).toBe(1);
-      expect(seq2).toBe(1);
+      // 同じ state から RECORDING_FAILED → seq=2
+      const s2 = overlayReducer(s1, { type: "RECORDING_FAILED", errorMsg: "err" });
+      expect(s2.hideRequest!.seq).toBe(2);
     });
   });
 });

@@ -42,9 +42,12 @@ function nextSeq(state: OverlayState): number {
 
 export function overlayReducer(state: OverlayState, action: OverlayAction): OverlayState {
   switch (action.type) {
-    case "RECORDING_START":
-      if (state.phase !== "idle" && !state.fading) return state;
+    case "RECORDING_START": {
+      const canStart = state.phase === "idle" || state.fading
+        || state.phase === "done" || state.phase === "error";
+      if (!canStart) return state;
       return { ...initialState, phase: "recording" };
+    }
 
     case "SET_TRANSCRIPT":
       if (state.phase !== "recording") return state;
