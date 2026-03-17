@@ -180,13 +180,13 @@ Ctrl+Shift+Space 長押し
 
 ```bash
 # 開発サーバー起動（フロントエンド + Tauri）
-npm run tauri dev
+pnpm tauri dev
 
 # プロダクションビルド
-npm run tauri build
+pnpm tauri build
 
 # 型チェック
-npx tsc --noEmit
+pnpm tsc --noEmit
 ```
 
 ### 技術スタック

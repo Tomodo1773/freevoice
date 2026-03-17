@@ -27,16 +27,16 @@ FreeVoice は Windows 専用の音声入力ツール。`Ctrl+Shift+Space` を押
 
 ```bash
 # 開発サーバー起動（フロントエンド + Tauri）
-npm run tauri dev
+pnpm tauri dev
 
 # プロダクションビルド
-npm run tauri build
+pnpm tauri build
 
 # フロントエンドのみビルド
-npm run build
+pnpm build
 
 # 型チェック
-npx tsc --noEmit
+pnpm tsc --noEmit
 ```
 
 ## アーキテクチャ

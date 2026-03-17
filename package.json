@@ -20,13 +20,14 @@
     "react": "^18",
     "react-dom": "^18"
   },
+  "packageManager": "pnpm@10.32.1",
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "@vitejs/plugin-react": "^4",
+    "@vitejs/plugin-react": "^4.7.0",
     "typescript": "^5",
-    "vite": "^5",
+    "vite": "^6.4.1",
     "vitest": "^4.1.0"
   }
 }
