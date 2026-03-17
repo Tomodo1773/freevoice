@@ -156,7 +156,7 @@ export default function Overlay() {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [phase]);
+  }, [phase === "recording"]);
 
   // リアルタイムテキスト末尾を常に表示
   useEffect(() => {
@@ -343,9 +343,7 @@ export default function Overlay() {
 
   // phase から既存 CSS クラス名へのマッピング（CSS変更不要にする）
   const cssStatus =
-    phase === "recording" ? "listening" :
-    phase === "idle" ? "listening" :
-    phase;
+    (phase === "recording" || phase === "idle") ? "listening" : phase;
 
   const pillClass = [
     "overlay-pill",
