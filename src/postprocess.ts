@@ -1,6 +1,39 @@
 import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
 import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
 
+export class PostprocessError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly responseBody: string
+  ) {
+    super(message);
+    this.name = "PostprocessError";
+  }
+
+  get retryable(): boolean {
+    return [429, 500, 502, 503].includes(this.status);
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function postprocess(
   transcript: string,
   endpoint: string,
@@ -39,9 +72,38 @@ export async function postprocess(
 
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(`後処理API エラー: ${res.status} ${text}`);
+    throw new PostprocessError(`後処理API エラー: ${res.status} ${text}`, res.status, text);
   }
 
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? transcript;
+}
+
+const RETRY_DELAYS = [1000, 3000];
+
+export async function postprocessWithRetry(
+  transcript: string,
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  reasoningEffort: ReasoningEffort,
+  signal?: AbortSignal
+): Promise<{ text: string; fallback: boolean }> {
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      const text = await postprocess(transcript, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      return { text, fallback: false };
+    } catch (e) {
+      if (!(e instanceof PostprocessError)) throw e;
+      if (!e.retryable || attempt >= RETRY_DELAYS.length) {
+        console.warn(`[FreeVoice] フォーマットAPI フォールバック: ${e.message}`);
+        return { text: transcript, fallback: true };
+      }
+      console.warn(`[FreeVoice] フォーマットAPI リトライ ${attempt + 1}/${RETRY_DELAYS.length}: ${e.status}`);
+      await delay(RETRY_DELAYS[attempt], signal);
+    }
+  }
+  /* istanbul ignore next -- unreachable: loop always returns */
+  return { text: transcript, fallback: true };
 }

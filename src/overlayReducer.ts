@@ -10,6 +10,7 @@ export interface OverlayState {
   phase: OverlayPhase;
   transcript: string;
   errorMsg: string;
+  fallback: boolean;
   fading: boolean;
   /** 非表示予約。seq で世代管理し、useEffect のクリーンアップでタイマーを自動キャンセル */
   hideRequest: { ms: number; seq: number } | null;
@@ -21,7 +22,7 @@ export type OverlayAction =
   | { type: "STOP_TRANSCRIBING" }
   | { type: "TRANSCRIPT_EMPTY"; silent: boolean }
   | { type: "TRANSCRIPT_READY"; transcript: string }
-  | { type: "FORMAT_DONE" }
+  | { type: "FORMAT_DONE"; fallback?: boolean }
   | { type: "STOP_ERROR"; errorMsg: string }
   | { type: "ABORT_CANCELLED" }
   | { type: "SET_TRANSCRIPT"; transcript: string }
@@ -32,6 +33,7 @@ export const initialState: OverlayState = {
   phase: "idle",
   transcript: "",
   errorMsg: "",
+  fallback: false,
   fading: false,
   hideRequest: null,
 };
@@ -79,13 +81,16 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
       if (state.phase !== "transcribing") return state;
       return { ...state, phase: "formatting", transcript: action.transcript };
 
-    case "FORMAT_DONE":
+    case "FORMAT_DONE": {
       if (state.phase !== "formatting") return state;
+      const fallback = action.fallback ?? false;
       return {
         ...state,
         phase: "done",
-        hideRequest: { ms: 1000, seq: nextSeq(state) },
+        fallback,
+        hideRequest: { ms: fallback ? 3000 : 1000, seq: nextSeq(state) },
       };
+    }
 
     case "STOP_ERROR":
       if (state.phase !== "transcribing" && state.phase !== "formatting") return state;

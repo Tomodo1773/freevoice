@@ -193,6 +193,48 @@ describe("overlayReducer", () => {
     });
   });
 
+  describe("フォールバック", () => {
+    it("FORMAT_DONE + fallback: true → fallback=true, hideRequest.ms=3000", () => {
+      const formatting = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+        { type: "TRANSCRIPT_READY", transcript: "test" },
+      ]);
+
+      const done = overlayReducer(formatting, { type: "FORMAT_DONE", fallback: true });
+      expect(done.phase).toBe("done");
+      expect(done.fallback).toBe(true);
+      expect(done.hideRequest!.ms).toBe(3000);
+    });
+
+    it("FORMAT_DONE + fallbackなし → fallback=false, hideRequest.ms=1000", () => {
+      const formatting = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+        { type: "TRANSCRIPT_READY", transcript: "test" },
+      ]);
+
+      const done = overlayReducer(formatting, { type: "FORMAT_DONE" });
+      expect(done.phase).toBe("done");
+      expect(done.fallback).toBe(false);
+      expect(done.hideRequest!.ms).toBe(1000);
+    });
+
+    it("RECORDING_START で fallback がリセットされる", () => {
+      const done = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+        { type: "TRANSCRIPT_READY", transcript: "test" },
+        { type: "FORMAT_DONE", fallback: true },
+      ]);
+      expect(done.fallback).toBe(true);
+
+      const recording = overlayReducer(done, { type: "RECORDING_START" });
+      expect(recording.phase).toBe("recording");
+      expect(recording.fallback).toBe(false);
+    });
+  });
+
   describe("不正遷移の無視", () => {
     it("idle → STOP_TRANSCRIBING は無視", () => {
       const result = overlayReducer(initialState, { type: "STOP_TRANSCRIBING" });

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
-import { postprocess } from "./postprocess";
+import { postprocessWithRetry } from "./postprocess";
 import { loadSettings } from "./useSettings";
 import { getApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
@@ -67,7 +67,7 @@ async function trySaveLog(
 
 export default function Overlay() {
   const [state, dispatch] = useReducer(overlayReducer, initialState);
-  const { phase, transcript, errorMsg, fading, hideRequest } = state;
+  const { phase, transcript, errorMsg, fallback, fading, hideRequest } = state;
 
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
@@ -302,7 +302,7 @@ export default function Overlay() {
 
       rawTranscript = raw;
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
-      const formatted = await postprocess(
+      const { text: formatted, fallback } = await postprocessWithRetry(
         raw,
         settings.endpoint,
         apiKey,
@@ -314,7 +314,7 @@ export default function Overlay() {
       formattedText = formatted;
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
-      dispatch({ type: "FORMAT_DONE" });
+      dispatch({ type: "FORMAT_DONE", fallback });
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -381,7 +381,7 @@ export default function Overlay() {
       : phase === "formatting"
       ? "Formatting..."
       : phase === "done"
-      ? "Completed"
+      ? (fallback ? "フォーマットをスキップしました" : "Completed")
       : errorMsg;
 
   return (
