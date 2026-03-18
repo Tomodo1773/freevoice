@@ -1,0 +1,76 @@
+version: 2
+updates:
+  # npm依存関係の更新設定
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # version-updatesを1つのPRにグループ化
+      npm-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      # security-updatesを1つのPRにグループ化
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps(npm)"
+      prefix-development: "deps(npm)"
+
+  # Cargo依存関係の更新設定
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # version-updatesを1つのPRにグループ化
+      cargo-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      # security-updatesを1つのPRにグループ化
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "cargo"
+    commit-message:
+      prefix: "deps(cargo)"
+      prefix-development: "deps(cargo)"
+
+  # GitHub Actionsの更新設定
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # version-updatesを1つのPRにグループ化
+      github-actions-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      # security-updatesを1つのPRにグループ化
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(github-actions)"
+      prefix-development: "deps(github-actions)"
