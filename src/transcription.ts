@@ -29,7 +29,7 @@ export class TranscriptionSession {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private peakAudioLevel = 0;
-  private static readonly SILENCE_THRESHOLD = 0.2;
+  private static readonly SILENCE_THRESHOLD = 0.05;
   private provider: TranscriptionProvider = "azure-openai";
   private endpoint = "";
   private apiKey = "";
@@ -162,8 +162,9 @@ export class TranscriptionSession {
         await this.audioContext.close().catch(() => {});
         this.audioContext = null;
       }
-      if (this.wasSilent) return "";
-      return this.recognizedTexts.join("");
+      const text = this.recognizedTexts.join("");
+      if (!text && this.wasSilent) return "";
+      return text;
     }
 
     // azure-openai パス
