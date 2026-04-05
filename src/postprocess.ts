@@ -1,5 +1,4 @@
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
-import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
+import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
 
 export class PostprocessError extends Error {
   constructor(
@@ -34,8 +33,31 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export function buildFormatRequest(
+  formatProvider: FormatProvider,
+  endpoint: string,
+  apiKey: string,
+): { url: string; headers: Record<string, string> } {
+  const base = formatProvider === "openai"
+    ? "https://api.openai.com/v1"
+    : endpoint.replace(/\/+$/, "");
+  const url = formatProvider === "azure"
+    ? `${base}/openai/v1/chat/completions`
+    : `${base}/chat/completions`;
+  return {
+    url,
+    headers: {
+      "Content-Type": "application/json",
+      ...(formatProvider === "openai"
+        ? { Authorization: `Bearer ${apiKey}` }
+        : { "api-key": apiKey }),
+    },
+  };
+}
+
 export async function postprocess(
   transcript: string,
+  formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
   model: string,
@@ -46,15 +68,13 @@ export async function postprocess(
   if (!transcript.trim()) return transcript;
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
 
-  const url = buildAzureChatCompletionsUrl(endpoint, model);
+  const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
 
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": apiKey,
-    },
+    headers,
     body: JSON.stringify({
+      model,
       messages: [
         {
           role: "system",
@@ -83,27 +103,35 @@ const RETRY_DELAYS = [1000, 3000];
 
 export async function postprocessWithRetry(
   transcript: string,
+  formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
   model: string,
   prompt: string,
   reasoningEffort: ReasoningEffort,
   signal?: AbortSignal
-): Promise<{ text: string; fallback: boolean }> {
+): Promise<{ text: string; fallback: boolean; fallbackReason?: string }> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const text = await postprocess(transcript, endpoint, apiKey, model, prompt, reasoningEffort, signal);
-      return { text, fallback: false };
+      const text = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      return { text, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
         console.warn(`[FreeVoice] フォーマットAPI フォールバック: ${e.message}`);
-        return { text: transcript, fallback: true };
+        const reason = e.status === 401 || e.status === 403
+          ? "認証エラー"
+          : e.status === 404
+          ? "エンドポイント不明"
+          : e.status === 429
+          ? "レート制限"
+          : `エラー ${e.status}`;
+        return { text: transcript, fallback: true, fallbackReason: reason };
       }
       console.warn(`[FreeVoice] フォーマットAPI リトライ ${attempt + 1}/${RETRY_DELAYS.length}: ${e.status}`);
       await delay(RETRY_DELAYS[attempt], signal);
     }
   }
   /* istanbul ignore next -- unreachable: loop always returns */
-  return { text: transcript, fallback: true };
+  return { text: transcript, fallback: true, fallbackReason: undefined };
 }

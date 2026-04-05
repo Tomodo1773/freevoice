@@ -11,6 +11,7 @@ export interface OverlayState {
   transcript: string;
   errorMsg: string;
   fallback: boolean;
+  fallbackReason: string;
   fading: boolean;
   /** 非表示予約。seq で世代管理し、useEffect のクリーンアップでタイマーを自動キャンセル */
   hideRequest: { ms: number; seq: number } | null;
@@ -22,7 +23,7 @@ export type OverlayAction =
   | { type: "STOP_TRANSCRIBING" }
   | { type: "TRANSCRIPT_EMPTY"; silent: boolean }
   | { type: "TRANSCRIPT_READY"; transcript: string }
-  | { type: "FORMAT_DONE"; fallback?: boolean }
+  | { type: "FORMAT_DONE"; fallback?: boolean; fallbackReason?: string }
   | { type: "STOP_ERROR"; errorMsg: string }
   | { type: "ABORT_CANCELLED" }
   | { type: "SET_TRANSCRIPT"; transcript: string }
@@ -34,6 +35,7 @@ export const initialState: OverlayState = {
   transcript: "",
   errorMsg: "",
   fallback: false,
+  fallbackReason: "",
   fading: false,
   hideRequest: null,
 };
@@ -88,6 +90,7 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
         ...state,
         phase: "done",
         fallback,
+        fallbackReason: action.fallbackReason ?? "",
         hideRequest: { ms: fallback ? 3000 : 1000, seq: nextSeq(state) },
       };
     }

@@ -4,26 +4,32 @@ export type InputMethod = "clipboard" | "keystroke";
 
 export type TranscriptionProvider = "azure-openai" | "azure-speech";
 
+export type FormatProvider = "azure" | "openai";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
   transcriptionModel: string;
-  postprocessModel: string;
   postprocessPrompt: string;
   logFolder: string;
   reasoningEffort: ReasoningEffort;
   inputMethod: InputMethod;
   transcriptionProvider: TranscriptionProvider;
+  formatProvider: FormatProvider;
+  formatEndpoint: string;
   speechEndpoint: string;
   speechLanguage: string;
   audioDeviceId: string;
+  azureFormatModel: string;
+  openaiFormatModel: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   shortcut: "Ctrl+Shift+Space",
   endpoint: "",
   transcriptionModel: "gpt-4o-transcribe",
-  postprocessModel: "gpt-5.2",
+  azureFormatModel: "gpt-5.2",
+  openaiFormatModel: "gpt-4o",
   postprocessPrompt: `ユーザーが提供するテキストは音声入力で文字起こしされたもので、誤った文字起こしの可能性がある。これを以下の手順で修正してユーザーに返す。
 
 1. 音声認識の誤字脱字を文脈から推測して修正する
@@ -44,6 +50,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reasoningEffort: "low",
   inputMethod: "clipboard",
   transcriptionProvider: "azure-openai",
+  formatProvider: "azure",
+  formatEndpoint: "",
   speechEndpoint: "",
   speechLanguage: "ja-JP",
   audioDeviceId: "",

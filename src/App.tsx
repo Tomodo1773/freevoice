@@ -3,7 +3,7 @@ import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { getApiKey, setApiKey } from "./apiKeyStore";
+import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import {
   Box,
   Button,
@@ -19,8 +19,8 @@ import {
 } from "@radix-ui/themes";
 import History from "./History";
 import { useSettings } from "./useSettings";
-import { AppSettings, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
+import { AppSettings, FormatProvider, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
+import { buildFormatRequest } from "./postprocess";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
@@ -44,6 +44,8 @@ export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [azureFormatApiKeyInput, setAzureFormatApiKeyInput] = useState("");
+  const [openaiFormatApiKeyInput, setOpenaiFormatApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
@@ -56,7 +58,11 @@ export default function App() {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
-    getApiKey().then((key) => { if (key) setApiKeyInput(key); });
+    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey }) => {
+      if (apiKey) setApiKeyInput(apiKey);
+      if (azureFormatApiKey) setAzureFormatApiKeyInput(azureFormatApiKey);
+      if (openaiFormatApiKey) setOpenaiFormatApiKeyInput(openaiFormatApiKey);
+    });
     isEnabled().then(setAutostartEnabled).catch(() => {});
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
@@ -79,6 +85,8 @@ export default function App() {
   const handleSave = async () => {
     saveSettings(form);
     await setApiKey(apiKeyInput);
+    await setAzureFormatApiKey(azureFormatApiKeyInput);
+    await setOpenaiFormatApiKey(openaiFormatApiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
@@ -88,18 +96,20 @@ export default function App() {
     setTimeout(() => setSaveStatus("idle"), 2000);
   };
 
+  const isOpenai = form.formatProvider === "openai";
+  const currentFormatApiKey = isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput;
+  const currentFormatModel = isOpenai ? form.openaiFormatModel : form.azureFormatModel;
+
   const handleTest = async () => {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const url = buildAzureChatCompletionsUrl(form.endpoint, form.postprocessModel);
+      const { url, headers } = buildFormatRequest(form.formatProvider, form.formatEndpoint, currentFormatApiKey);
       const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": apiKeyInput,
-        },
+        headers,
         body: JSON.stringify({
+          model: currentFormatModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
           reasoning_effort: "none",
@@ -335,9 +345,11 @@ export default function App() {
 
           {page === "model" && (
             <Flex direction="column" gap="4">
+              <Heading size="3">文字起こし</Heading>
+
               <Box>
                 <Text as="label" className="field-label" htmlFor="transcriptionProvider">
-                  文字起こしプロバイダー
+                  プロバイダー
                 </Text>
                 <Select.Root
                   value={form.transcriptionProvider}
@@ -351,25 +363,39 @@ export default function App() {
                 </Select.Root>
               </Box>
 
-              <Box>
-                <Text as="label" className="field-label" htmlFor="endpoint">
-                  Microsoft Foundry エンドポイント
-                </Text>
-                <TextField.Root
-                  id="endpoint"
-                  value={form.endpoint}
-                  onChange={(e) => handleChange("endpoint", e.target.value)}
-                  placeholder={ENDPOINT_SAMPLE}
-                />
-                <Box className="field-note">
-                  <Text as="p" size="1" color="gray">
-                    Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
+              {form.transcriptionProvider === "azure-openai" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="endpoint">
+                    エンドポイント
                   </Text>
-                  <Text as="p" size="1" color="gray">
-                    例: {ENDPOINT_SAMPLE}
+                  <TextField.Root
+                    id="endpoint"
+                    value={form.endpoint}
+                    onChange={(e) => handleChange("endpoint", e.target.value)}
+                    placeholder={ENDPOINT_SAMPLE}
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Azure AI Foundry のプロジェクト URL。例: {ENDPOINT_SAMPLE}
                   </Text>
                 </Box>
-              </Box>
+              )}
+
+              {form.transcriptionProvider === "azure-speech" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="speechEndpoint">
+                    Speech エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="speechEndpoint"
+                    value={form.speechEndpoint}
+                    onChange={(e) => handleChange("speechEndpoint", e.target.value)}
+                    placeholder="例: https://eastus2.stt.speech.microsoft.com"
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Foundry プロジェクトのリージョンに合わせたエンドポイントを入力してください。
+                  </Text>
+                </Box>
+              )}
 
               <Box>
                 <Text as="label" className="field-label" htmlFor="apiKey">
@@ -380,71 +406,104 @@ export default function App() {
                   type="password"
                   value={apiKeyInput}
                   onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="••••••••••••••••••••••••"
+                  placeholder="APIキーを入力"
                 />
               </Box>
 
               {form.transcriptionProvider === "azure-speech" && (
-                <>
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="speechEndpoint">
-                      Speech エンドポイント
-                    </Text>
-                    <TextField.Root
-                      id="speechEndpoint"
-                      value={form.speechEndpoint}
-                      onChange={(e) => handleChange("speechEndpoint", e.target.value)}
-                      placeholder="例: https://eastus2.stt.speech.microsoft.com"
-                    />
-                    <Text size="1" color="gray" mt="1" as="p">
-                      Foundry プロジェクトのリージョンに合わせたエンドポイントを入力してください。API Key は上記と同じものを使用します。
-                    </Text>
-                  </Box>
-
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="speechLanguage">
-                      言語
-                    </Text>
-                    <TextField.Root
-                      id="speechLanguage"
-                      value={form.speechLanguage}
-                      onChange={(e) => handleChange("speechLanguage", e.target.value)}
-                      placeholder="例: ja-JP"
-                    />
-                  </Box>
-                </>
-              )}
-
-              <Flex gap="4">
-                {form.transcriptionProvider === "azure-openai" && (
-                  <Box className="field-half">
-                    <Text as="label" className="field-label" htmlFor="transcriptionModel">
-                      文字起こしモデル
-                    </Text>
-                    <TextField.Root
-                      id="transcriptionModel"
-                      value={form.transcriptionModel}
-                      onChange={(e) => handleChange("transcriptionModel", e.target.value)}
-                      placeholder="gpt-4o-transcribe"
-                    />
-                  </Box>
-                )}
-                <Box className={form.transcriptionProvider === "azure-openai" ? "field-half" : ""}>
-                  <Text as="label" className="field-label" htmlFor="postprocessModel">
-                    後処理モデル
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="speechLanguage">
+                    言語
                   </Text>
                   <TextField.Root
-                    id="postprocessModel"
-                    value={form.postprocessModel}
-                    onChange={(e) => handleChange("postprocessModel", e.target.value)}
-                    placeholder="gpt-5.2"
+                    id="speechLanguage"
+                    value={form.speechLanguage}
+                    onChange={(e) => handleChange("speechLanguage", e.target.value)}
+                    placeholder="例: ja-JP"
                   />
                 </Box>
-              </Flex>
+              )}
+
+              {form.transcriptionProvider === "azure-openai" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="transcriptionModel">
+                    モデル
+                  </Text>
+                  <TextField.Root
+                    id="transcriptionModel"
+                    value={form.transcriptionModel}
+                    onChange={(e) => handleChange("transcriptionModel", e.target.value)}
+                    placeholder="gpt-4o-transcribe"
+                  />
+                </Box>
+              )}
+
+              <Heading size="3" mt="4">フォーマット</Heading>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatProvider">
+                  プロバイダー
+                </Text>
+                <Select.Root
+                  value={form.formatProvider}
+                  onValueChange={(v) => handleChange("formatProvider", v as FormatProvider)}
+                >
+                  <Select.Trigger id="formatProvider" style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="azure">Azure</Select.Item>
+                    <Select.Item value="openai">OpenAI</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
+
+              {form.formatProvider === "azure" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="formatEndpoint">
+                    エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="formatEndpoint"
+                    value={form.formatEndpoint}
+                    onChange={(e) => handleChange("formatEndpoint", e.target.value)}
+                    placeholder="https://your-resource.openai.azure.com/"
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Azure ポータルからコピーしたエンドポイントをそのまま貼り付けてください。
+                  </Text>
+                  <Text size="1" color="gray" as="p">
+                    例: https://your-resource.openai.azure.com/
+                  </Text>
+                </Box>
+              )}
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatApiKey">
+                  API Key
+                </Text>
+                <TextField.Root
+                  id="formatApiKey"
+                  type="password"
+                  value={isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput}
+                  onChange={(e) => (isOpenai ? setOpenaiFormatApiKeyInput : setAzureFormatApiKeyInput)(e.target.value)}
+                  placeholder={isOpenai ? "sk-..." : "APIキーを入力"}
+                />
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatModel">
+                  モデル
+                </Text>
+                <TextField.Root
+                  id="formatModel"
+                  value={isOpenai ? form.openaiFormatModel : form.azureFormatModel}
+                  onChange={(e) => handleChange(isOpenai ? "openaiFormatModel" : "azureFormatModel", e.target.value)}
+                  placeholder={isOpenai ? "gpt-4o" : "gpt-5.2"}
+                />
+              </Box>
 
               <Box>
                 <Text as="label" className="field-label" htmlFor="reasoningEffort">
-                  Reasoning Effort（後処理AI）
+                  Reasoning Effort
                 </Text>
                 <Select.Root
                   value={form.reasoningEffort}
@@ -482,7 +541,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || !form.endpoint || !apiKeyInput}
+                  disabled={testStatus === "testing" || (form.formatProvider === "azure" && !form.formatEndpoint) || !currentFormatApiKey}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>
