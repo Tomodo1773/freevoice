@@ -371,6 +371,23 @@ export default function App() {
                 </Box>
               )}
 
+              {form.transcriptionProvider === "azure-speech" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="speechEndpoint">
+                    Speech エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="speechEndpoint"
+                    value={form.speechEndpoint}
+                    onChange={(e) => handleChange("speechEndpoint", e.target.value)}
+                    placeholder="例: https://eastus2.stt.speech.microsoft.com"
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Foundry プロジェクトのリージョンに合わせたエンドポイントを入力してください。
+                  </Text>
+                </Box>
+              )}
+
               <Box>
                 <Text as="label" className="field-label" htmlFor="apiKey">
                   API Key
@@ -385,34 +402,17 @@ export default function App() {
               </Box>
 
               {form.transcriptionProvider === "azure-speech" && (
-                <>
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="speechEndpoint">
-                      Speech エンドポイント
-                    </Text>
-                    <TextField.Root
-                      id="speechEndpoint"
-                      value={form.speechEndpoint}
-                      onChange={(e) => handleChange("speechEndpoint", e.target.value)}
-                      placeholder="例: https://eastus2.stt.speech.microsoft.com"
-                    />
-                    <Text size="1" color="gray" mt="1" as="p">
-                      Foundry プロジェクトのリージョンに合わせたエンドポイントを入力してください。API Key は上記と同じものを使用します。
-                    </Text>
-                  </Box>
-
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="speechLanguage">
-                      言語
-                    </Text>
-                    <TextField.Root
-                      id="speechLanguage"
-                      value={form.speechLanguage}
-                      onChange={(e) => handleChange("speechLanguage", e.target.value)}
-                      placeholder="例: ja-JP"
-                    />
-                  </Box>
-                </>
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="speechLanguage">
+                    言語
+                  </Text>
+                  <TextField.Root
+                    id="speechLanguage"
+                    value={form.speechLanguage}
+                    onChange={(e) => handleChange("speechLanguage", e.target.value)}
+                    placeholder="例: ja-JP"
+                  />
+                </Box>
               )}
 
               {form.transcriptionProvider === "azure-openai" && (
