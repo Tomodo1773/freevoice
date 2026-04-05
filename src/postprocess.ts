@@ -110,21 +110,28 @@ export async function postprocessWithRetry(
   prompt: string,
   reasoningEffort: ReasoningEffort,
   signal?: AbortSignal
-): Promise<{ text: string; fallback: boolean }> {
+): Promise<{ text: string; fallback: boolean; fallbackReason?: string }> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
       const text = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
-      return { text, fallback: false };
+      return { text, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
         console.warn(`[FreeVoice] フォーマットAPI フォールバック: ${e.message}`);
-        return { text: transcript, fallback: true };
+        const reason = e.status === 401 || e.status === 403
+          ? "認証エラー"
+          : e.status === 404
+          ? "エンドポイント不明"
+          : e.status === 429
+          ? "レート制限"
+          : `エラー ${e.status}`;
+        return { text: transcript, fallback: true, fallbackReason: reason };
       }
       console.warn(`[FreeVoice] フォーマットAPI リトライ ${attempt + 1}/${RETRY_DELAYS.length}: ${e.status}`);
       await delay(RETRY_DELAYS[attempt], signal);
     }
   }
   /* istanbul ignore next -- unreachable: loop always returns */
-  return { text: transcript, fallback: true };
+  return { text: transcript, fallback: true, fallbackReason: undefined };
 }

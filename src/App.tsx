@@ -3,7 +3,7 @@ import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { getApiKey, setApiKey, getFormatApiKey, setFormatApiKey } from "./apiKeyStore";
+import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import {
   Box,
   Button,
@@ -44,7 +44,8 @@ export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
   const [apiKeyInput, setApiKeyInput] = useState("");
-  const [formatApiKeyInput, setFormatApiKeyInput] = useState("");
+  const [azureFormatApiKeyInput, setAzureFormatApiKeyInput] = useState("");
+  const [openaiFormatApiKeyInput, setOpenaiFormatApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
@@ -57,8 +58,11 @@ export default function App() {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
-    getApiKey().then((key) => { if (key) setApiKeyInput(key); });
-    getFormatApiKey().then((key) => { if (key) setFormatApiKeyInput(key); });
+    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey }) => {
+      if (apiKey) setApiKeyInput(apiKey);
+      if (azureFormatApiKey) setAzureFormatApiKeyInput(azureFormatApiKey);
+      if (openaiFormatApiKey) setOpenaiFormatApiKeyInput(openaiFormatApiKey);
+    });
     isEnabled().then(setAutostartEnabled).catch(() => {});
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
@@ -81,7 +85,8 @@ export default function App() {
   const handleSave = async () => {
     saveSettings(form);
     await setApiKey(apiKeyInput);
-    await setFormatApiKey(formatApiKeyInput);
+    await setAzureFormatApiKey(azureFormatApiKeyInput);
+    await setOpenaiFormatApiKey(openaiFormatApiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
@@ -91,16 +96,20 @@ export default function App() {
     setTimeout(() => setSaveStatus("idle"), 2000);
   };
 
+  const isOpenai = form.formatProvider === "openai";
+  const currentFormatApiKey = isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput;
+  const currentFormatModel = isOpenai ? form.openaiFormatModel : form.azureFormatModel;
+
   const handleTest = async () => {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const { url, headers } = buildFormatRequest(form.formatProvider, form.formatEndpoint, formatApiKeyInput);
+      const { url, headers } = buildFormatRequest(form.formatProvider, form.formatEndpoint, currentFormatApiKey);
       const res = await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: form.postprocessModel,
+          model: currentFormatModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
           reasoning_effort: "none",
@@ -448,23 +457,23 @@ export default function App() {
               </Box>
 
               {form.formatProvider === "azure" && (
-              <Box>
-                <Text as="label" className="field-label" htmlFor="formatEndpoint">
-                  エンドポイント
-                </Text>
-                <TextField.Root
-                  id="formatEndpoint"
-                  value={form.formatEndpoint}
-                  onChange={(e) => handleChange("formatEndpoint", e.target.value)}
-                  placeholder="https://your-resource.openai.azure.com/"
-                />
-                <Text size="1" color="gray" mt="1" as="p">
-                  Azure ポータルからコピーしたエンドポイントをそのまま貼り付けてください。
-                </Text>
-                <Text size="1" color="gray" as="p">
-                  例: https://your-resource.openai.azure.com/
-                </Text>
-              </Box>
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="formatEndpoint">
+                    エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="formatEndpoint"
+                    value={form.formatEndpoint}
+                    onChange={(e) => handleChange("formatEndpoint", e.target.value)}
+                    placeholder="https://your-resource.openai.azure.com/"
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Azure ポータルからコピーしたエンドポイントをそのまま貼り付けてください。
+                  </Text>
+                  <Text size="1" color="gray" as="p">
+                    例: https://your-resource.openai.azure.com/
+                  </Text>
+                </Box>
               )}
 
               <Box>
@@ -474,21 +483,21 @@ export default function App() {
                 <TextField.Root
                   id="formatApiKey"
                   type="password"
-                  value={formatApiKeyInput}
-                  onChange={(e) => setFormatApiKeyInput(e.target.value)}
-                  placeholder={form.formatProvider === "openai" ? "sk-..." : "APIキーを入力"}
+                  value={isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput}
+                  onChange={(e) => (isOpenai ? setOpenaiFormatApiKeyInput : setAzureFormatApiKeyInput)(e.target.value)}
+                  placeholder={isOpenai ? "sk-..." : "APIキーを入力"}
                 />
               </Box>
 
               <Box>
-                <Text as="label" className="field-label" htmlFor="postprocessModel">
+                <Text as="label" className="field-label" htmlFor="formatModel">
                   モデル
                 </Text>
                 <TextField.Root
-                  id="postprocessModel"
-                  value={form.postprocessModel}
-                  onChange={(e) => handleChange("postprocessModel", e.target.value)}
-                  placeholder="gpt-5.2"
+                  id="formatModel"
+                  value={isOpenai ? form.openaiFormatModel : form.azureFormatModel}
+                  onChange={(e) => handleChange(isOpenai ? "openaiFormatModel" : "azureFormatModel", e.target.value)}
+                  placeholder={isOpenai ? "gpt-4o" : "gpt-5.2"}
                 />
               </Box>
 
@@ -532,7 +541,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || (form.formatProvider === "azure" && !form.formatEndpoint) || !formatApiKeyInput}
+                  disabled={testStatus === "testing" || (form.formatProvider === "azure" && !form.formatEndpoint) || !currentFormatApiKey}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>

@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry } from "./postprocess";
 import { loadSettings } from "./useSettings";
-import { getApiKey, getFormatApiKey } from "./apiKeyStore";
+import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
 
 function formatError(err: unknown): string {
@@ -67,7 +67,7 @@ async function trySaveLog(
 
 export default function Overlay() {
   const [state, dispatch] = useReducer(overlayReducer, initialState);
-  const { phase, transcript, errorMsg, fallback, fading, hideRequest } = state;
+  const { phase, transcript, errorMsg, fallback, fallbackReason, fading, hideRequest } = state;
 
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
@@ -82,6 +82,7 @@ export default function Overlay() {
   const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
+    migrateFormatApiKey().catch(() => {});
     // 古いログフォルダを起動時にクリーンアップ
     (async () => {
       try {
@@ -219,10 +220,10 @@ export default function Overlay() {
     oscillator.onended = () => ctx.close();
 
     const settings = loadSettings();
-    const [apiKey, formatApiKey] = await Promise.all([getApiKey(), getFormatApiKey()]);
+    const { apiKey, azureFormatApiKey, openaiFormatApiKey } = await getAllApiKeys();
     cachedSettingsRef.current = settings;
     cachedApiKeyRef.current = apiKey;
-    cachedFormatApiKeyRef.current = formatApiKey;
+    cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
     setAudioLevel(0);
     setSilentWarn(false);
     silentSinceRef.current = null;
@@ -303,12 +304,13 @@ export default function Overlay() {
 
       rawTranscript = raw;
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
-      const { text: formatted, fallback } = await postprocessWithRetry(
+      const formatModel = settings.formatProvider === "openai" ? settings.openaiFormatModel : settings.azureFormatModel;
+      const { text: formatted, fallback, fallbackReason } = await postprocessWithRetry(
         raw,
         settings.formatProvider,
         settings.formatEndpoint,
         cachedFormatApiKeyRef.current,
-        settings.postprocessModel,
+        formatModel,
         settings.postprocessPrompt,
         settings.reasoningEffort,
         controller.signal
@@ -316,7 +318,7 @@ export default function Overlay() {
       formattedText = formatted;
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
-      dispatch({ type: "FORMAT_DONE", fallback });
+      dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -383,7 +385,7 @@ export default function Overlay() {
       : phase === "formatting"
       ? "Formatting..."
       : phase === "done"
-      ? (fallback ? "フォーマットをスキップしました" : "Completed")
+      ? (fallback ? `スキップ: ${fallbackReason || "エラー"}` : "Completed")
       : errorMsg;
 
   return (
