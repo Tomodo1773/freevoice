@@ -354,20 +354,22 @@ export default function App() {
                 </Select.Root>
               </Box>
 
-              <Box>
-                <Text as="label" className="field-label" htmlFor="endpoint">
-                  エンドポイント
-                </Text>
-                <TextField.Root
-                  id="endpoint"
-                  value={form.endpoint}
-                  onChange={(e) => handleChange("endpoint", e.target.value)}
-                  placeholder={ENDPOINT_SAMPLE}
-                />
-                <Text size="1" color="gray" mt="1" as="p">
-                  Azure AI Foundry のプロジェクト URL。例: {ENDPOINT_SAMPLE}
-                </Text>
-              </Box>
+              {form.transcriptionProvider === "azure-openai" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="endpoint">
+                    エンドポイント
+                  </Text>
+                  <TextField.Root
+                    id="endpoint"
+                    value={form.endpoint}
+                    onChange={(e) => handleChange("endpoint", e.target.value)}
+                    placeholder={ENDPOINT_SAMPLE}
+                  />
+                  <Text size="1" color="gray" mt="1" as="p">
+                    Azure AI Foundry のプロジェクト URL。例: {ENDPOINT_SAMPLE}
+                  </Text>
+                </Box>
+              )}
 
               <Box>
                 <Text as="label" className="field-label" htmlFor="apiKey">
