@@ -39,8 +39,11 @@ export function buildFormatRequest(
   apiKey: string,
 ): { url: string; headers: Record<string, string> } {
   const base = endpoint.replace(/\/+$/, "");
+  const url = formatProvider === "azure"
+    ? `${base}/openai/v1/chat/completions`
+    : `${base}/chat/completions`;
   return {
-    url: `${base}/chat/completions`,
+    url,
     headers: {
       "Content-Type": "application/json",
       ...(formatProvider === "openai"

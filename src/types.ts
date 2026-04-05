@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   inputMethod: "clipboard",
   transcriptionProvider: "azure-openai",
   formatProvider: "azure",
-  formatEndpoint: "https://api.openai.com",
+  formatEndpoint: "",
   speechEndpoint: "",
   speechLanguage: "ja-JP",
   audioDeviceId: "",

@@ -378,7 +378,7 @@ export default function App() {
                   type="password"
                   value={apiKeyInput}
                   onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="••••••••••••••••••••••••"
+                  placeholder="APIキーを入力"
                 />
               </Box>
 
@@ -455,14 +455,14 @@ export default function App() {
                   onChange={(e) => handleChange("formatEndpoint", e.target.value)}
                   placeholder={form.formatProvider === "openai"
                     ? "https://api.openai.com/v1"
-                    : "https://your-resource.openai.azure.com/openai/v1"}
+                    : "https://your-resource.openai.azure.com/"}
                 />
                 <Text size="1" color="gray" mt="1" as="p">
-                  Chat Completions API の v1 エンドポイント。末尾の /chat/completions は不要です。
+                  Azure ポータルからコピーしたエンドポイントをそのまま貼り付けてください。
                 </Text>
                 {form.formatProvider === "azure" && (
                   <Text size="1" color="gray" as="p">
-                    例: https://your-resource.openai.azure.com/openai/v1
+                    例: https://your-resource.openai.azure.com/
                   </Text>
                 )}
               </Box>
@@ -476,7 +476,7 @@ export default function App() {
                   type="password"
                   value={formatApiKeyInput}
                   onChange={(e) => setFormatApiKeyInput(e.target.value)}
-                  placeholder={form.formatProvider === "openai" ? "sk-..." : "••••••••••••••••••••••••"}
+                  placeholder={form.formatProvider === "openai" ? "sk-..." : "APIキーを入力"}
                 />
               </Box>
 
