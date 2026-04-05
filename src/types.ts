@@ -4,6 +4,8 @@ export type InputMethod = "clipboard" | "keystroke";
 
 export type TranscriptionProvider = "azure-openai" | "azure-speech";
 
+export type FormatProvider = "azure" | "openai";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
@@ -14,6 +16,8 @@ export interface AppSettings {
   reasoningEffort: ReasoningEffort;
   inputMethod: InputMethod;
   transcriptionProvider: TranscriptionProvider;
+  formatProvider: FormatProvider;
+  formatEndpoint: string;
   speechEndpoint: string;
   speechLanguage: string;
   audioDeviceId: string;
@@ -44,6 +48,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reasoningEffort: "low",
   inputMethod: "clipboard",
   transcriptionProvider: "azure-openai",
+  formatProvider: "azure",
+  formatEndpoint: "https://api.openai.com",
   speechEndpoint: "",
   speechLanguage: "ja-JP",
   audioDeviceId: "",

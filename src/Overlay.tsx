@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry } from "./postprocess";
 import { loadSettings } from "./useSettings";
-import { getApiKey } from "./apiKeyStore";
+import { getApiKey, getFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
 
 function formatError(err: unknown): string {
@@ -78,6 +78,7 @@ export default function Overlay() {
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const cachedApiKeyRef = useRef("");
+  const cachedFormatApiKeyRef = useRef("");
   const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
@@ -218,9 +219,10 @@ export default function Overlay() {
     oscillator.onended = () => ctx.close();
 
     const settings = loadSettings();
-    const apiKey = await getApiKey();
+    const [apiKey, formatApiKey] = await Promise.all([getApiKey(), getFormatApiKey()]);
     cachedSettingsRef.current = settings;
     cachedApiKeyRef.current = apiKey;
+    cachedFormatApiKeyRef.current = formatApiKey;
     setAudioLevel(0);
     setSilentWarn(false);
     silentSinceRef.current = null;
@@ -302,10 +304,14 @@ export default function Overlay() {
 
       rawTranscript = raw;
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
+      const isOpenAI = settings.formatProvider === "openai";
+      const formatEndpoint = isOpenAI ? settings.formatEndpoint : settings.endpoint;
+      const formatApiKey = isOpenAI ? cachedFormatApiKeyRef.current : apiKey;
       const { text: formatted, fallback } = await postprocessWithRetry(
         raw,
-        settings.endpoint,
-        apiKey,
+        settings.formatProvider ?? "azure",
+        formatEndpoint,
+        formatApiKey,
         settings.postprocessModel,
         settings.postprocessPrompt,
         settings.reasoningEffort,

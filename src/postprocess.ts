@@ -1,5 +1,5 @@
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
-import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
+import { resolveAzureOpenAIBase } from "./azureOpenaiEndpoint";
+import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
 
 export class PostprocessError extends Error {
   constructor(
@@ -34,8 +34,34 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export function buildFormatRequest(
+  formatProvider: FormatProvider,
+  endpoint: string,
+  apiKey: string,
+): { url: string; headers: Record<string, string> } {
+  if (formatProvider === "openai") {
+    const base = endpoint.replace(/\/+$/, "");
+    return {
+      url: `${base}/v1/chat/completions`,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+    };
+  }
+  const base = resolveAzureOpenAIBase(endpoint);
+  return {
+    url: `${base}/openai/v1/chat/completions`,
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": apiKey,
+    },
+  };
+}
+
 export async function postprocess(
   transcript: string,
+  formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
   model: string,
@@ -46,15 +72,13 @@ export async function postprocess(
   if (!transcript.trim()) return transcript;
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
 
-  const url = buildAzureChatCompletionsUrl(endpoint, model);
+  const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
 
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": apiKey,
-    },
+    headers,
     body: JSON.stringify({
+      model,
       messages: [
         {
           role: "system",
@@ -83,6 +107,7 @@ const RETRY_DELAYS = [1000, 3000];
 
 export async function postprocessWithRetry(
   transcript: string,
+  formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
   model: string,
@@ -92,7 +117,7 @@ export async function postprocessWithRetry(
 ): Promise<{ text: string; fallback: boolean }> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const text = await postprocess(transcript, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      const text = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
       return { text, fallback: false };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;

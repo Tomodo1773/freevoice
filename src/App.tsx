@@ -3,7 +3,7 @@ import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { getApiKey, setApiKey } from "./apiKeyStore";
+import { getApiKey, setApiKey, getFormatApiKey, setFormatApiKey } from "./apiKeyStore";
 import {
   Box,
   Button,
@@ -19,8 +19,8 @@ import {
 } from "@radix-ui/themes";
 import History from "./History";
 import { useSettings } from "./useSettings";
-import { AppSettings, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
-import { buildAzureChatCompletionsUrl } from "./azureOpenaiEndpoint";
+import { AppSettings, FormatProvider, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
+import { buildFormatRequest } from "./postprocess";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
@@ -44,6 +44,7 @@ export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [formatApiKeyInput, setFormatApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
@@ -57,6 +58,7 @@ export default function App() {
 
   useEffect(() => {
     getApiKey().then((key) => { if (key) setApiKeyInput(key); });
+    getFormatApiKey().then((key) => { if (key) setFormatApiKeyInput(key); });
     isEnabled().then(setAutostartEnabled).catch(() => {});
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
@@ -79,6 +81,7 @@ export default function App() {
   const handleSave = async () => {
     saveSettings(form);
     await setApiKey(apiKeyInput);
+    await setFormatApiKey(formatApiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
@@ -92,14 +95,15 @@ export default function App() {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const url = buildAzureChatCompletionsUrl(form.endpoint, form.postprocessModel);
+      const isOpenAI = form.formatProvider === "openai";
+      const endpoint = isOpenAI ? form.formatEndpoint : form.endpoint;
+      const key = isOpenAI ? formatApiKeyInput : apiKeyInput;
+      const { url, headers } = buildFormatRequest(form.formatProvider, endpoint, key);
       const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": apiKeyInput,
-        },
+        headers,
         body: JSON.stringify({
+          model: form.postprocessModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
           reasoning_effort: "none",
@@ -352,6 +356,53 @@ export default function App() {
               </Box>
 
               <Box>
+                <Text as="label" className="field-label" htmlFor="formatProvider">
+                  フォーマットプロバイダー
+                </Text>
+                <Select.Root
+                  value={form.formatProvider}
+                  onValueChange={(v) => handleChange("formatProvider", v as FormatProvider)}
+                >
+                  <Select.Trigger id="formatProvider" style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="azure">Azure（Foundry エンドポイントを共用）</Select.Item>
+                    <Select.Item value="openai">OpenAI</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
+
+              {form.formatProvider === "openai" && (
+                <>
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="formatEndpoint">
+                      フォーマット エンドポイント
+                    </Text>
+                    <TextField.Root
+                      id="formatEndpoint"
+                      value={form.formatEndpoint}
+                      onChange={(e) => handleChange("formatEndpoint", e.target.value)}
+                      placeholder="https://api.openai.com"
+                    />
+                    <Text size="1" color="gray" mt="1" as="p">
+                      OpenAI 互換 API のベース URL。通常は変更不要です。
+                    </Text>
+                  </Box>
+                  <Box>
+                    <Text as="label" className="field-label" htmlFor="formatApiKey">
+                      フォーマット API Key
+                    </Text>
+                    <TextField.Root
+                      id="formatApiKey"
+                      type="password"
+                      value={formatApiKeyInput}
+                      onChange={(e) => setFormatApiKeyInput(e.target.value)}
+                      placeholder="sk-..."
+                    />
+                  </Box>
+                </>
+              )}
+
+              <Box>
                 <Text as="label" className="field-label" htmlFor="endpoint">
                   Microsoft Foundry エンドポイント
                 </Text>
@@ -482,7 +533,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || !form.endpoint || !apiKeyInput}
+                  disabled={testStatus === "testing" || (form.formatProvider === "openai" ? (!form.formatEndpoint || !formatApiKeyInput) : (!form.endpoint || !apiKeyInput))}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>
