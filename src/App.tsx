@@ -460,6 +460,11 @@ export default function App() {
                 <Text size="1" color="gray" mt="1" as="p">
                   Chat Completions API の v1 エンドポイント。末尾の /chat/completions は不要です。
                 </Text>
+                {form.formatProvider === "azure" && (
+                  <Text size="1" color="gray" as="p">
+                    例: https://your-resource.openai.azure.com/openai/v1
+                  </Text>
+                )}
               </Box>
 
               <Box>
