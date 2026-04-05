@@ -7,6 +7,7 @@ export default defineConfig(async () => ({
   test: {
     globals: true,
   },
+  base: "./",
   clearScreen: false,
   server: {
     port: 1420,
