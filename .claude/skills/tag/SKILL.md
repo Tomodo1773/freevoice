@@ -23,12 +23,18 @@ Git タグ（セマンティックバージョニング）を付与し、GitHub 
    - 「機能追加」「新機能」「feat」→ minor
    - 「大幅変更」「破壊的変更」「メジャー」→ major
 3. バージョン番号を適切にインクリメントする。インクリメント時、上位が上がったら下位はゼロにリセットする（例: `v0.3.4` → minor なら `v0.4.0`）
-4. 新しいタグをユーザーに確認してから付与する:
+4. 新しいタグをユーザーに確認する
+5. 現在のブランチがmain以外の場合、変更をmainに反映する:
+   - PRが未作成なら作成する
+   - CIが実行中なら `gh pr checks <PR番号> --watch` で完了を待つ
+   - CIが通ったら `gh pr merge <PR番号> --merge` でマージする
+6. mainを最新にしてタグを付与する:
    ```bash
-   git tag v{new_version}
+   git fetch origin main
+   git tag v{new_version} origin/main
    ```
-5. タグを GitHub にプッシュする:
+7. タグを GitHub にプッシュする:
    ```bash
    git push origin v{new_version}
    ```
-6. 完了を報告する
+8. 完了を報告する
