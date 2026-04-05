@@ -309,7 +309,7 @@ export default function Overlay() {
       const formatApiKey = isOpenAI ? cachedFormatApiKeyRef.current : apiKey;
       const { text: formatted, fallback } = await postprocessWithRetry(
         raw,
-        settings.formatProvider ?? "azure",
+        settings.formatProvider,
         formatEndpoint,
         formatApiKey,
         settings.postprocessModel,

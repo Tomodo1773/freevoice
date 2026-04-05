@@ -13,23 +13,18 @@ function getStore() {
   return storePromise;
 }
 
-export async function getApiKey(): Promise<string> {
+async function getValue(key: string): Promise<string> {
   const store = await getStore();
-  return (await store.get<string>(API_KEY_KEY)) ?? "";
+  return (await store.get<string>(key)) ?? "";
 }
 
-export async function setApiKey(key: string): Promise<void> {
+async function setValue(key: string, value: string): Promise<void> {
   const store = await getStore();
-  await store.set(API_KEY_KEY, key);
+  await store.set(key, value);
 }
 
-export async function getFormatApiKey(): Promise<string> {
-  const store = await getStore();
-  return (await store.get<string>(FORMAT_API_KEY_KEY)) ?? "";
-}
-
-export async function setFormatApiKey(key: string): Promise<void> {
-  const store = await getStore();
-  await store.set(FORMAT_API_KEY_KEY, key);
-}
+export const getApiKey = () => getValue(API_KEY_KEY);
+export const setApiKey = (key: string) => setValue(API_KEY_KEY, key);
+export const getFormatApiKey = () => getValue(FORMAT_API_KEY_KEY);
+export const setFormatApiKey = (key: string) => setValue(FORMAT_API_KEY_KEY, key);
 
