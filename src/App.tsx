@@ -447,6 +447,7 @@ export default function App() {
                 </Select.Root>
               </Box>
 
+              {form.formatProvider === "azure" && (
               <Box>
                 <Text as="label" className="field-label" htmlFor="formatEndpoint">
                   エンドポイント
@@ -455,19 +456,16 @@ export default function App() {
                   id="formatEndpoint"
                   value={form.formatEndpoint}
                   onChange={(e) => handleChange("formatEndpoint", e.target.value)}
-                  placeholder={form.formatProvider === "openai"
-                    ? "https://api.openai.com/v1"
-                    : "https://your-resource.openai.azure.com/"}
+                  placeholder="https://your-resource.openai.azure.com/"
                 />
                 <Text size="1" color="gray" mt="1" as="p">
                   Azure ポータルからコピーしたエンドポイントをそのまま貼り付けてください。
                 </Text>
-                {form.formatProvider === "azure" && (
-                  <Text size="1" color="gray" as="p">
-                    例: https://your-resource.openai.azure.com/
-                  </Text>
-                )}
+                <Text size="1" color="gray" as="p">
+                  例: https://your-resource.openai.azure.com/
+                </Text>
               </Box>
+              )}
 
               <Box>
                 <Text as="label" className="field-label" htmlFor="formatApiKey">
@@ -534,7 +532,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || !form.formatEndpoint || !formatApiKeyInput}
+                  disabled={testStatus === "testing" || (form.formatProvider === "azure" && !form.formatEndpoint) || !formatApiKeyInput}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>

@@ -15,6 +15,8 @@ function getStore() {
 
 async function getValue(key: string): Promise<string> {
   const store = await getStore();
+  // 別ウィンドウからの書き込みを反映するためディスクから再読み込み
+  await store.reload();
   return (await store.get<string>(key)) ?? "";
 }
 
