@@ -283,7 +283,6 @@ export default function Overlay() {
     invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
 
     const settings = cachedSettingsRef.current;
-    const apiKey = cachedApiKeyRef.current;
 
     const now = new Date();
     let rawTranscript = "";
@@ -304,14 +303,11 @@ export default function Overlay() {
 
       rawTranscript = raw;
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
-      const isOpenAI = settings.formatProvider === "openai";
-      const formatEndpoint = isOpenAI ? settings.formatEndpoint : settings.endpoint;
-      const formatApiKey = isOpenAI ? cachedFormatApiKeyRef.current : apiKey;
       const { text: formatted, fallback } = await postprocessWithRetry(
         raw,
         settings.formatProvider,
-        formatEndpoint,
-        formatApiKey,
+        settings.formatEndpoint,
+        cachedFormatApiKeyRef.current,
         settings.postprocessModel,
         settings.postprocessPrompt,
         settings.reasoningEffort,

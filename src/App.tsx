@@ -95,10 +95,7 @@ export default function App() {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const isOpenAI = form.formatProvider === "openai";
-      const endpoint = isOpenAI ? form.formatEndpoint : form.endpoint;
-      const key = isOpenAI ? formatApiKeyInput : apiKeyInput;
-      const { url, headers } = buildFormatRequest(form.formatProvider, endpoint, key);
+      const { url, headers } = buildFormatRequest(form.formatProvider, form.formatEndpoint, formatApiKeyInput);
       const res = await fetch(url, {
         method: "POST",
         headers,
@@ -339,9 +336,11 @@ export default function App() {
 
           {page === "model" && (
             <Flex direction="column" gap="4">
+              <Heading size="3">文字起こし</Heading>
+
               <Box>
                 <Text as="label" className="field-label" htmlFor="transcriptionProvider">
-                  文字起こしプロバイダー
+                  プロバイダー
                 </Text>
                 <Select.Root
                   value={form.transcriptionProvider}
@@ -356,55 +355,8 @@ export default function App() {
               </Box>
 
               <Box>
-                <Text as="label" className="field-label" htmlFor="formatProvider">
-                  フォーマットプロバイダー
-                </Text>
-                <Select.Root
-                  value={form.formatProvider}
-                  onValueChange={(v) => handleChange("formatProvider", v as FormatProvider)}
-                >
-                  <Select.Trigger id="formatProvider" style={{ width: "100%" }} />
-                  <Select.Content>
-                    <Select.Item value="azure">Azure（Foundry エンドポイントを共用）</Select.Item>
-                    <Select.Item value="openai">OpenAI</Select.Item>
-                  </Select.Content>
-                </Select.Root>
-              </Box>
-
-              {form.formatProvider === "openai" && (
-                <>
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="formatEndpoint">
-                      フォーマット エンドポイント
-                    </Text>
-                    <TextField.Root
-                      id="formatEndpoint"
-                      value={form.formatEndpoint}
-                      onChange={(e) => handleChange("formatEndpoint", e.target.value)}
-                      placeholder="https://api.openai.com"
-                    />
-                    <Text size="1" color="gray" mt="1" as="p">
-                      OpenAI 互換 API のベース URL。通常は変更不要です。
-                    </Text>
-                  </Box>
-                  <Box>
-                    <Text as="label" className="field-label" htmlFor="formatApiKey">
-                      フォーマット API Key
-                    </Text>
-                    <TextField.Root
-                      id="formatApiKey"
-                      type="password"
-                      value={formatApiKeyInput}
-                      onChange={(e) => setFormatApiKeyInput(e.target.value)}
-                      placeholder="sk-..."
-                    />
-                  </Box>
-                </>
-              )}
-
-              <Box>
                 <Text as="label" className="field-label" htmlFor="endpoint">
-                  Microsoft Foundry エンドポイント
+                  エンドポイント
                 </Text>
                 <TextField.Root
                   id="endpoint"
@@ -412,14 +364,9 @@ export default function App() {
                   onChange={(e) => handleChange("endpoint", e.target.value)}
                   placeholder={ENDPOINT_SAMPLE}
                 />
-                <Box className="field-note">
-                  <Text as="p" size="1" color="gray">
-                    Azure AI Foundry のプロジェクト URL をそのまま貼り付ければ動作します。
-                  </Text>
-                  <Text as="p" size="1" color="gray">
-                    例: {ENDPOINT_SAMPLE}
-                  </Text>
-                </Box>
+                <Text size="1" color="gray" mt="1" as="p">
+                  Azure AI Foundry のプロジェクト URL。例: {ENDPOINT_SAMPLE}
+                </Text>
               </Box>
 
               <Box>
@@ -466,36 +413,83 @@ export default function App() {
                 </>
               )}
 
-              <Flex gap="4">
-                {form.transcriptionProvider === "azure-openai" && (
-                  <Box className="field-half">
-                    <Text as="label" className="field-label" htmlFor="transcriptionModel">
-                      文字起こしモデル
-                    </Text>
-                    <TextField.Root
-                      id="transcriptionModel"
-                      value={form.transcriptionModel}
-                      onChange={(e) => handleChange("transcriptionModel", e.target.value)}
-                      placeholder="gpt-4o-transcribe"
-                    />
-                  </Box>
-                )}
-                <Box className={form.transcriptionProvider === "azure-openai" ? "field-half" : ""}>
-                  <Text as="label" className="field-label" htmlFor="postprocessModel">
-                    後処理モデル
+              {form.transcriptionProvider === "azure-openai" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="transcriptionModel">
+                    モデル
                   </Text>
                   <TextField.Root
-                    id="postprocessModel"
-                    value={form.postprocessModel}
-                    onChange={(e) => handleChange("postprocessModel", e.target.value)}
-                    placeholder="gpt-5.2"
+                    id="transcriptionModel"
+                    value={form.transcriptionModel}
+                    onChange={(e) => handleChange("transcriptionModel", e.target.value)}
+                    placeholder="gpt-4o-transcribe"
                   />
                 </Box>
-              </Flex>
+              )}
+
+              <Heading size="3" mt="4">フォーマット</Heading>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatProvider">
+                  プロバイダー
+                </Text>
+                <Select.Root
+                  value={form.formatProvider}
+                  onValueChange={(v) => handleChange("formatProvider", v as FormatProvider)}
+                >
+                  <Select.Trigger id="formatProvider" style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="azure">Azure</Select.Item>
+                    <Select.Item value="openai">OpenAI</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatEndpoint">
+                  エンドポイント
+                </Text>
+                <TextField.Root
+                  id="formatEndpoint"
+                  value={form.formatEndpoint}
+                  onChange={(e) => handleChange("formatEndpoint", e.target.value)}
+                  placeholder={form.formatProvider === "openai"
+                    ? "https://api.openai.com/v1"
+                    : "https://your-resource.openai.azure.com/openai/v1"}
+                />
+                <Text size="1" color="gray" mt="1" as="p">
+                  Chat Completions API の v1 エンドポイント。末尾の /chat/completions は不要です。
+                </Text>
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="formatApiKey">
+                  API Key
+                </Text>
+                <TextField.Root
+                  id="formatApiKey"
+                  type="password"
+                  value={formatApiKeyInput}
+                  onChange={(e) => setFormatApiKeyInput(e.target.value)}
+                  placeholder={form.formatProvider === "openai" ? "sk-..." : "••••••••••••••••••••••••"}
+                />
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="postprocessModel">
+                  モデル
+                </Text>
+                <TextField.Root
+                  id="postprocessModel"
+                  value={form.postprocessModel}
+                  onChange={(e) => handleChange("postprocessModel", e.target.value)}
+                  placeholder="gpt-5.2"
+                />
+              </Box>
 
               <Box>
                 <Text as="label" className="field-label" htmlFor="reasoningEffort">
-                  Reasoning Effort（後処理AI）
+                  Reasoning Effort
                 </Text>
                 <Select.Root
                   value={form.reasoningEffort}
@@ -533,7 +527,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || (form.formatProvider === "openai" ? (!form.formatEndpoint || !formatApiKeyInput) : (!form.endpoint || !apiKeyInput))}
+                  disabled={testStatus === "testing" || !form.formatEndpoint || !formatApiKeyInput}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>

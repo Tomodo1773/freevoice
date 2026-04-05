@@ -1,4 +1,3 @@
-import { resolveAzureOpenAIBase } from "./azureOpenaiEndpoint";
 import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
 
 export class PostprocessError extends Error {
@@ -39,22 +38,14 @@ export function buildFormatRequest(
   endpoint: string,
   apiKey: string,
 ): { url: string; headers: Record<string, string> } {
-  if (formatProvider === "openai") {
-    const base = endpoint.replace(/\/+$/, "");
-    return {
-      url: `${base}/v1/chat/completions`,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-    };
-  }
-  const base = resolveAzureOpenAIBase(endpoint);
+  const base = endpoint.replace(/\/+$/, "");
   return {
-    url: `${base}/openai/v1/chat/completions`,
+    url: `${base}/chat/completions`,
     headers: {
       "Content-Type": "application/json",
-      "api-key": apiKey,
+      ...(formatProvider === "openai"
+        ? { Authorization: `Bearer ${apiKey}` }
+        : { "api-key": apiKey }),
     },
   };
 }
