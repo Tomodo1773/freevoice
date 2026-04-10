@@ -119,6 +119,40 @@ fn append_diag_log(
     write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
 }
 
+/// LangSmith の OTLP エンドポイントへ 1 span 分のトレースを POST する。
+/// WebView の fetch() は CORS で阻まれる可能性があるため Rust 側から送る。
+/// 失敗時はエラー文字列を返すが、呼び出し側（JS）で握り潰して本流に影響させない前提。
+#[tauri::command]
+async fn post_langsmith_trace(
+    endpoint: String,
+    api_key: String,
+    project: String,
+    body: String,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let res = client
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("Langsmith-Project", project)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        let snippet: String = text.chars().take(200).collect();
+        return Err(format!("langsmith {}: {}", status.as_u16(), snippet));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn paste_text(text: String, method: String) -> Result<(), String> {
     std::thread::spawn(move || {
@@ -544,6 +578,7 @@ pub fn run() {
             cleanup_old_logs,
             set_system_audio_mute,
             append_diag_log,
+            post_langsmith_trace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

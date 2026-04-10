@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry } from "./postprocess";
+import { sendFormatSpan } from "./langsmithTrace";
 import { loadSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
@@ -71,6 +72,7 @@ export default function Overlay() {
   const abortRef = useRef<AbortController | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedFormatApiKeyRef = useRef("");
+  const cachedLangsmithApiKeyRef = useRef("");
   const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
@@ -223,10 +225,11 @@ export default function Overlay() {
     oscillator.onended = () => ctx.close();
 
     const settings = loadSettings();
-    const { apiKey, azureFormatApiKey, openaiFormatApiKey } = await getAllApiKeys();
+    const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
     cachedSettingsRef.current = settings;
     cachedApiKeyRef.current = apiKey;
     cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
+    cachedLangsmithApiKeyRef.current = langsmithApiKey;
     setAudioLevel(0);
     setSilentWarn(false);
     silentSinceRef.current = null;
@@ -326,7 +329,15 @@ export default function Overlay() {
       rawTranscript = raw;
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
       const formatModel = settings.formatProvider === "openai" ? settings.openaiFormatModel : settings.azureFormatModel;
-      const { text: formatted, fallback, fallbackReason } = await postprocessWithRetry(
+      const formatStartMs = Date.now();
+      const {
+        text: formatted,
+        fallback,
+        fallbackReason,
+        usage: formatUsage,
+        model: formatResponseModel,
+        errorStatus: formatErrorStatus,
+      } = await postprocessWithRetry(
         raw,
         settings.formatProvider,
         settings.formatEndpoint,
@@ -336,7 +347,32 @@ export default function Overlay() {
         settings.reasoningEffort,
         controller.signal
       );
+      const formatEndMs = Date.now();
       formattedText = formatted;
+
+      // LangSmith トレース送信（失敗はログのみで握り潰し）
+      if (settings.langsmithEnabled) {
+        void sendFormatSpan({
+          enabled: true,
+          region: settings.langsmithRegion,
+          project: settings.langsmithProject,
+          apiKey: cachedLangsmithApiKeyRef.current,
+          provider: settings.formatProvider,
+          requestModel: formatModel,
+          responseModel: formatResponseModel,
+          systemPrompt: settings.postprocessPrompt?.trim() || "",
+          userTranscript: raw,
+          completion: fallback ? undefined : formatted,
+          reasoningEffort: settings.reasoningEffort,
+          usage: formatUsage,
+          startTimeMs: formatStartMs,
+          endTimeMs: formatEndMs,
+          includeContent: settings.langsmithIncludeContent,
+          error: fallback
+            ? { message: fallbackReason ?? "format fallback", status: formatErrorStatus }
+            : undefined,
+        });
+      }
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
       dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });

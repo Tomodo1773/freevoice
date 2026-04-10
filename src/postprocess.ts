@@ -56,6 +56,17 @@ export function buildFormatRequest(
   };
 }
 
+export interface PostprocessUsage {
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface PostprocessResult {
+  text: string;
+  usage?: PostprocessUsage;
+  model?: string;
+}
+
 export async function postprocess(
   transcript: string,
   formatProvider: FormatProvider,
@@ -65,8 +76,8 @@ export async function postprocess(
   prompt: string,
   reasoningEffort: ReasoningEffort,
   signal?: AbortSignal
-): Promise<string> {
-  if (!transcript.trim()) return transcript;
+): Promise<PostprocessResult> {
+  if (!transcript.trim()) return { text: transcript };
   const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
 
   const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
@@ -97,10 +108,25 @@ export async function postprocess(
   }
 
   const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? transcript;
+  const text: string = data.choices?.[0]?.message?.content ?? transcript;
+  const promptTokens = data.usage?.prompt_tokens;
+  const completionTokens = data.usage?.completion_tokens;
+  const usage: PostprocessUsage | undefined =
+    typeof promptTokens === "number" && typeof completionTokens === "number"
+      ? { input_tokens: promptTokens, output_tokens: completionTokens }
+      : undefined;
+  const responseModel: string | undefined =
+    typeof data.model === "string" ? data.model : undefined;
+  return { text, usage, model: responseModel };
 }
 
 const RETRY_DELAYS = [1000, 3000];
+
+export interface PostprocessWithRetryResult extends PostprocessResult {
+  fallback: boolean;
+  fallbackReason?: string;
+  errorStatus?: number;
+}
 
 export async function postprocessWithRetry(
   transcript: string,
@@ -111,11 +137,11 @@ export async function postprocessWithRetry(
   prompt: string,
   reasoningEffort: ReasoningEffort,
   signal?: AbortSignal
-): Promise<{ text: string; fallback: boolean; fallbackReason?: string }> {
+): Promise<PostprocessWithRetryResult> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const text = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
-      return { text, fallback: false, fallbackReason: undefined };
+      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      return { ...result, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
@@ -127,7 +153,7 @@ export async function postprocessWithRetry(
           ? "レート制限"
           : `エラー ${e.status}`;
         logWarn("postprocess", "format api fallback", { status: e.status, reason });
-        return { text: transcript, fallback: true, fallbackReason: reason };
+        return { text: transcript, fallback: true, fallbackReason: reason, errorStatus: e.status };
       }
       logWarn("postprocess", "format api retry", {
         attempt: attempt + 1,
