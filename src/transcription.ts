@@ -1,6 +1,7 @@
 import type * as SpeechSDKTypes from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 import { TranscriptionProvider } from "./types";
+import { logWarn } from "./diagLog";
 
 function pickMimeType(): string {
   const candidates = [
@@ -38,6 +39,9 @@ export class TranscriptionSession {
   private speechLanguage = "";
   private recognizer: SpeechSDKTypes.SpeechRecognizer | null = null;
   private recognizedTexts: string[] = [];
+  /** 最新の暫定テキスト。recognized（確定）で空にし、recognizing（暫定）で更新する。
+   *  stop 時に recognized が間に合わない環境向けのフォールバック。 */
+  private lastInterimText = "";
 
   async start(params: {
     provider: TranscriptionProvider;
@@ -85,6 +89,7 @@ export class TranscriptionSession {
     if (this.provider === "azure-speech") {
       const SpeechSDK = await import("microsoft-cognitiveservices-speech-sdk");
       this.recognizedTexts = [];
+      this.lastInterimText = "";
       const speechConfig = SpeechSDK.SpeechConfig.fromEndpoint(
         new URL(this.speechEndpoint),
         this.apiKey
@@ -96,6 +101,7 @@ export class TranscriptionSession {
       this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
       this.recognizer.recognizing = (_, e) => {
         if (e.result.text) {
+          this.lastInterimText = e.result.text;
           params.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
         }
       };
@@ -105,6 +111,7 @@ export class TranscriptionSession {
           e.result.text
         ) {
           this.recognizedTexts.push(e.result.text);
+          this.lastInterimText = "";
           params.onInterimResult?.(this.recognizedTexts.join(""));
         }
       };
@@ -162,9 +169,18 @@ export class TranscriptionSession {
         await this.audioContext.close().catch(() => {});
         this.audioContext = null;
       }
-      const text = this.recognizedTexts.join("");
-      if (!text && this.wasSilent) return "";
-      return text;
+      // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
+      // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
+      // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
+      const finalText = this.recognizedTexts.join("");
+      if (finalText) return finalText;
+      if (this.lastInterimText) {
+        logWarn("transcription.stop", "azure-speech interim fallback used", {
+          interimLen: this.lastInterimText.length,
+        });
+        return this.lastInterimText;
+      }
+      return "";
     }
 
     // azure-openai パス

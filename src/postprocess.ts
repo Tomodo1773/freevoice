@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
+import { logWarn } from "./diagLog";
 
 export class PostprocessError extends Error {
   constructor(
@@ -118,7 +119,6 @@ export async function postprocessWithRetry(
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
-        console.warn(`[FreeVoice] フォーマットAPI フォールバック: ${e.message}`);
         const reason = e.status === 401 || e.status === 403
           ? "認証エラー"
           : e.status === 404
@@ -126,9 +126,14 @@ export async function postprocessWithRetry(
           : e.status === 429
           ? "レート制限"
           : `エラー ${e.status}`;
+        logWarn("postprocess", "format api fallback", { status: e.status, reason });
         return { text: transcript, fallback: true, fallbackReason: reason };
       }
-      console.warn(`[FreeVoice] フォーマットAPI リトライ ${attempt + 1}/${RETRY_DELAYS.length}: ${e.status}`);
+      logWarn("postprocess", "format api retry", {
+        attempt: attempt + 1,
+        max: RETRY_DELAYS.length,
+        status: e.status,
+      });
       await delay(RETRY_DELAYS[attempt], signal);
     }
   }
