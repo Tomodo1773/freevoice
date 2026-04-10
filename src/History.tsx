@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Box, Button, Card, Flex, Text } from "@radix-ui/themes";
 import { useSettings } from "./useSettings";
+import { logError } from "./diagLog";
 
 interface LogEntry {
   timestamp: string;
@@ -51,7 +52,7 @@ export default function History() {
           );
         setEntries(parsed);
       } catch (e) {
-        console.error("[FreeVoice] read_logs failed", e);
+        logError("history", "read_logs failed", e);
       } finally {
         setLoading(false);
       }

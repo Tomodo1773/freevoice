@@ -21,6 +21,8 @@ import History from "./History";
 import { useSettings } from "./useSettings";
 import { AppSettings, FormatProvider, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
 import { buildFormatRequest } from "./postprocess";
+import { logWarn, logError } from "./diagLog";
+import { formatError } from "./errors";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
@@ -63,17 +65,21 @@ export default function App() {
       if (azureFormatApiKey) setAzureFormatApiKeyInput(azureFormatApiKey);
       if (openaiFormatApiKey) setOpenaiFormatApiKeyInput(openaiFormatApiKey);
     });
-    isEnabled().then(setAutostartEnabled).catch(() => {});
+    isEnabled().then(setAutostartEnabled).catch((e) =>
+      logWarn("app.init", "autostart isEnabled failed", { error: formatError(e) })
+    );
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
       setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
-    }).catch(() => {});
+    }).catch((e) =>
+      logWarn("app.init", "enumerateDevices failed", { error: formatError(e) })
+    );
   }, []);
 
   useEffect(() => {
     if (settings.shortcut !== "Ctrl+Shift+Space") {
       invoke("update_shortcut", { shortcut: settings.shortcut }).catch((e) =>
-        console.error("起動時ショートカット同期失敗:", e)
+        logError("app.init", "shortcut sync failed", e)
       );
     }
   }, []);
@@ -90,7 +96,7 @@ export default function App() {
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
-      console.error("ショートカット更新失敗:", e);
+      logError("app.updateShortcut", "update failed", e);
     }
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
@@ -323,7 +329,7 @@ export default function App() {
                         if (checked) await enable(); else await disable();
                         setAutostartEnabled(checked);
                       } catch (e) {
-                        console.error("スタートアップ設定失敗:", e);
+                        logError("app.autostart", "set failed", e);
                       }
                     }}
                   />

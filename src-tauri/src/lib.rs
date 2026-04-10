@@ -1,4 +1,5 @@
 use enigo::{Enigo, Settings};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -9,6 +10,113 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 struct AppShortcutState {
     current: Arc<Mutex<String>>,
+}
+
+/// 診断ログへの書き込みを直列化するための排他制御。
+/// オーバーレイウィンドウと設定ウィンドウから並行して invoke されうるため必要。
+struct DiagLogState {
+    mutex: Mutex<()>,
+}
+
+/// 診断ログのパス。履歴ログと同じ `logs/` フォルダ直下。
+/// `cleanup_old_logs` は `is_dir()` ガードで個別ファイルを除外するため衝突しない。
+fn diag_log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs")
+        .join("freevoice.log"))
+}
+
+/// chrono 非依存で UTC の ISO8601（ミリ秒精度）を返す。
+/// 例: "2026-04-10T10:23:45.123Z"
+fn format_iso8601_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs() as i64;
+    let millis = dur.subsec_millis();
+
+    // Unix 秒 → 年月日時分秒（UTC、Gregorian）
+    let days = secs.div_euclid(86_400);
+    let time_of_day = secs.rem_euclid(86_400);
+    let hour = (time_of_day / 3600) as u32;
+    let minute = ((time_of_day % 3600) / 60) as u32;
+    let second = (time_of_day % 60) as u32;
+
+    // 1970-01-01 からの経過日数を年月日に変換
+    // アルゴリズム: Howard Hinnant "date algorithms"
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = (y + if m <= 2 { 1 } else { 0 }) as i32;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, m, d, hour, minute, second, millis
+    )
+}
+
+/// Rust 内部から診断ログに書き込む。setup() や Tauri コマンドから呼び出す。
+/// 失敗は伝播せず Err を返すだけ（呼び出し側でログ出力は無視してよい）。
+fn write_diag_log_internal(
+    app: &AppHandle,
+    level: &str,
+    source: &str,
+    message: &str,
+    context: Option<&str>,
+) -> Result<(), String> {
+    let state = app.state::<DiagLogState>();
+    let _guard = state
+        .mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let path = diag_log_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // ローテーション: 1MB 超で .old に rename（既存 .old は上書き）
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() >= 1_000_000 {
+            let old = path.with_file_name("freevoice.log.old");
+            let _ = std::fs::rename(&path, &old);
+        }
+    }
+
+    let ts = format_iso8601_now();
+    let line = match context {
+        Some(ctx) => format!("{} {} [{}] {} | {}\n", ts, level, source, message, ctx),
+        None => format!("{} {} [{}] {}\n", ts, level, source, message),
+    };
+
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(line.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn append_diag_log(
+    app: AppHandle,
+    level: String,
+    source: String,
+    message: String,
+    context: Option<String>,
+) -> Result<(), String> {
+    write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
 }
 
 #[tauri::command]
@@ -207,16 +315,39 @@ async fn update_shortcut(
         .on_shortcut(shortcut.as_str(), move |_app, _shortcut, event| {
             match event.state() {
                 ShortcutState::Pressed => {
-                    let _ = app_handle.emit("recording-start", ());
+                    if let Err(e) = app_handle.emit("recording-start", ()) {
+                        let _ = write_diag_log_internal(
+                            &app_handle,
+                            "ERROR",
+                            "shortcut.press",
+                            "emit recording-start failed",
+                            Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                        );
+                    }
                 }
                 ShortcutState::Released => {
-                    let _ = app_handle.emit("recording-stop", ());
+                    if let Err(e) = app_handle.emit("recording-stop", ()) {
+                        let _ = write_diag_log_internal(
+                            &app_handle,
+                            "ERROR",
+                            "shortcut.release",
+                            "emit recording-stop failed",
+                            Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                        );
+                    }
                 }
             }
         })
         .map_err(|e| e.to_string())?;
 
     *shortcut_state.current.lock().unwrap() = shortcut;
+    let _ = write_diag_log_internal(
+        &app,
+        "INFO",
+        "shortcut.update",
+        "shortcut changed",
+        None,
+    );
     Ok(())
 }
 
@@ -257,7 +388,14 @@ pub fn run() {
         .manage(AppShortcutState {
             current: Arc::new(Mutex::new("Ctrl+Shift+Space".to_string())),
         })
+        .manage(DiagLogState {
+            mutex: Mutex::new(()),
+        })
         .setup(|app| {
+            // 起動マーカー（以降の記録が同一プロセスのものか判別するため）
+            let handle = app.handle().clone();
+            let _ = write_diag_log_internal(&handle, "INFO", "app.setup", "startup", None);
+
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "再起動", true, None::<&str>)?;
@@ -268,14 +406,38 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "restart" => {
-                        let _ = app.global_shortcut().unregister_all();
+                        if let Err(e) = app.global_shortcut().unregister_all() {
+                            let _ = write_diag_log_internal(
+                                app,
+                                "WARN",
+                                "tray.restart",
+                                "unregister_all failed",
+                                Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                            );
+                        }
                         app.restart();
                     }
                     "quit" => app.exit(0),
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                            if let Err(e) = w.show() {
+                                let _ = write_diag_log_internal(
+                                    app,
+                                    "WARN",
+                                    "tray.settings",
+                                    "show failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
+                            if let Err(e) = w.set_focus() {
+                                let _ = write_diag_log_internal(
+                                    app,
+                                    "WARN",
+                                    "tray.settings",
+                                    "set_focus failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
                         }
                     }
                     _ => {}
@@ -288,8 +450,24 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                            if let Err(e) = w.show() {
+                                let _ = write_diag_log_internal(
+                                    app,
+                                    "WARN",
+                                    "tray.doubleclick",
+                                    "show failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
+                            if let Err(e) = w.set_focus() {
+                                let _ = write_diag_log_internal(
+                                    app,
+                                    "WARN",
+                                    "tray.doubleclick",
+                                    "set_focus failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
                         }
                     }
                 });
@@ -303,10 +481,19 @@ pub fn run() {
             // 設定画面を閉じたときは破棄せず非表示にする（2回目以降も開けるように）
             if let Some(main_win) = app.get_webview_window("main") {
                 let main_win_clone = main_win.clone();
+                let app_for_close = app.handle().clone();
                 main_win.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = main_win_clone.hide();
+                        if let Err(e) = main_win_clone.hide() {
+                            let _ = write_diag_log_internal(
+                                &app_for_close,
+                                "WARN",
+                                "main_win.close",
+                                "hide failed",
+                                Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                            );
+                        }
                     }
                 });
             }
@@ -316,10 +503,26 @@ pub fn run() {
                 .on_shortcut("Ctrl+Shift+Space", move |_app, _shortcut, event| {
                     match event.state() {
                         ShortcutState::Pressed => {
-                            let _ = app_handle.emit("recording-start", ());
+                            if let Err(e) = app_handle.emit("recording-start", ()) {
+                                let _ = write_diag_log_internal(
+                                    &app_handle,
+                                    "ERROR",
+                                    "shortcut.press",
+                                    "emit recording-start failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
                         }
                         ShortcutState::Released => {
-                            let _ = app_handle.emit("recording-stop", ());
+                            if let Err(e) = app_handle.emit("recording-stop", ()) {
+                                let _ = write_diag_log_internal(
+                                    &app_handle,
+                                    "ERROR",
+                                    "shortcut.release",
+                                    "emit recording-stop failed",
+                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                );
+                            }
                         }
                     }
                 })?;
@@ -340,6 +543,7 @@ pub fn run() {
             get_app_log_dir,
             cleanup_old_logs,
             set_system_audio_mute,
+            append_diag_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FreeVoice");

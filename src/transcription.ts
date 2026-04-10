@@ -1,6 +1,7 @@
 import type * as SpeechSDKTypes from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 import { TranscriptionProvider } from "./types";
+import { logWarn } from "./diagLog";
 
 function pickMimeType(): string {
   const candidates = [
@@ -174,7 +175,9 @@ export class TranscriptionSession {
       const finalText = this.recognizedTexts.join("");
       if (finalText) return finalText;
       if (this.lastInterimText) {
-        console.warn("[FreeVoice] azure-speech: recognized が間に合わず interim をフォールバック採用");
+        logWarn("transcription.stop", "azure-speech interim fallback used", {
+          interimLen: this.lastInterimText.length,
+        });
         return this.lastInterimText;
       }
       return "";

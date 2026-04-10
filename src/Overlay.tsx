@@ -7,16 +7,8 @@ import { postprocessWithRetry } from "./postprocess";
 import { loadSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
-}
+import { formatError } from "./errors";
+import { logInfo, logWarn, logError } from "./diagLog";
 
 /** 詳細なエラーを短い定型メッセージに変換する（オーバーレイ表示用） */
 function toUserMessage(err: unknown): string {
@@ -61,7 +53,7 @@ async function trySaveLog(
     const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
     await saveLogEntry(logFolder, now, data);
   } catch (logErr) {
-    console.error("[FreeVoice] save_log failed", logErr);
+    logError("overlay.saveLog", "save_log failed", logErr);
   }
 }
 
@@ -82,7 +74,10 @@ export default function Overlay() {
   const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
-    migrateFormatApiKey().catch(() => {});
+    logInfo("overlay.init", "overlay window initialized");
+    migrateFormatApiKey().catch((e) =>
+      logWarn("overlay.init", "migrateFormatApiKey failed", { error: formatError(e) })
+    );
     // 古いログフォルダを起動時にクリーンアップ
     (async () => {
       try {
@@ -90,14 +85,20 @@ export default function Overlay() {
         const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
         await invoke("cleanup_old_logs", { folder: logFolder, keepDays: 30 });
       } catch (e) {
-        console.error("[FreeVoice] cleanup_old_logs failed", e);
+        logError("overlay.init", "cleanup_old_logs failed", e);
       }
     })();
 
     const appWindow = getCurrentWebviewWindow();
-    appWindow.setFocusable(false).catch(() => {});
-    invoke("set_click_through").catch(() => {});
-    invoke("position_overlay").catch(() => {});
+    appWindow.setFocusable(false).catch((e) =>
+      logWarn("overlay.init", "setFocusable failed", { error: formatError(e) })
+    );
+    invoke("set_click_through").catch((e) =>
+      logWarn("overlay.init", "set_click_through failed", { error: formatError(e) })
+    );
+    invoke("position_overlay").catch((e) =>
+      logWarn("overlay.init", "position_overlay failed", { error: formatError(e) })
+    );
 
     // In React StrictMode (dev), effects can mount/unmount twice.
     // Ensure we don't leak duplicate global event listeners.
@@ -196,12 +197,14 @@ export default function Overlay() {
   const handleStart = async () => {
     // 処理中（transcribing/formatting）なら abort してキャンセル
     if (abortRef.current) {
+      logInfo("overlay.handleStart", "abort in-flight processing");
       abortRef.current.abort();
       return;
     }
     // 多重起動ガード（最初の await より前に同期的にチェック）
     if (sessionRef.current) return;
 
+    logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
 
     const now = new Date();
@@ -234,8 +237,12 @@ export default function Overlay() {
     const [, mediaStream] = await Promise.all([
       (async () => {
         await Promise.all([
-          appWindow.setFocusable(false).catch(() => {}),
-          invoke("position_overlay").catch(() => {}),
+          appWindow.setFocusable(false).catch((e) =>
+            logWarn("overlay.handleStart", "setFocusable failed", { error: formatError(e) })
+          ),
+          invoke("position_overlay").catch((e) =>
+            logWarn("overlay.handleStart", "position_overlay failed", { error: formatError(e) })
+          ),
         ]);
         await appWindow.show();
       })(),
@@ -252,7 +259,9 @@ export default function Overlay() {
     const session = new TranscriptionSession();
     sessionRef.current = session;
 
-    invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) => console.warn("mute failed", e));
+    invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) =>
+      logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: formatError(e) })
+    );
 
     try {
       await session.start({
@@ -268,8 +277,12 @@ export default function Overlay() {
       });
     } catch (e) {
       sessionRef.current = null;
-      invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
-      console.error("[FreeVoice] handleStart failed", e);
+      invoke("set_system_audio_mute", { mute: false }).catch((muteErr: unknown) =>
+        logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: formatError(muteErr) })
+      );
+      logError("overlay.handleStart", "session.start failed", e, {
+        provider: settings.transcriptionProvider,
+      });
       dispatch({ type: "RECORDING_FAILED", errorMsg: toUserMessage(e) });
       await trySaveLog(settings.logFolder.trim(), now, { transcription: "", formatted: "", error: formatError(e) });
     }
@@ -281,7 +294,10 @@ export default function Overlay() {
     if (!session) return;
     sessionRef.current = null;
 
-    invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) => console.warn("unmute failed", e));
+    logInfo("overlay.handleStop", "stop");
+    invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) =>
+      logWarn("overlay.handleStop", "set_system_audio_mute(false) failed", { error: formatError(e) })
+    );
 
     const settings = cachedSettingsRef.current;
 
@@ -298,6 +314,11 @@ export default function Overlay() {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
         abortRef.current = null;
+        if (session.wasSilent) {
+          logInfo("overlay.handleStop", "empty transcript (silent)");
+        } else {
+          logWarn("overlay.handleStop", "empty transcript non-silent", { silent: false });
+        }
         dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
         return;
       }
@@ -322,13 +343,14 @@ export default function Overlay() {
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
+        logInfo("overlay.handleStop", "cancelled by user");
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
         dispatch({ type: "ABORT_CANCELLED" });
         return;
       }
       stopError = e;
-      console.error("[FreeVoice] handleStop failed", e);
+      logError("overlay.handleStop", "stop failed", e);
       dispatch({ type: "STOP_ERROR", errorMsg: toUserMessage(e) });
     } finally {
       abortRef.current = null;
