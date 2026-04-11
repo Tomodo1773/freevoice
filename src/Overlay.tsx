@@ -350,10 +350,8 @@ export default function Overlay() {
       const formatEndMs = Date.now();
       formattedText = formatted;
 
-      // LangSmith トレース送信（失敗はログのみで握り潰し）
       if (settings.langsmithEnabled) {
         void sendFormatSpan({
-          enabled: true,
           region: settings.langsmithRegion,
           project: settings.langsmithProject,
           apiKey: cachedLangsmithApiKeyRef.current,

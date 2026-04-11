@@ -119,9 +119,8 @@ fn append_diag_log(
     write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
 }
 
-/// LangSmith の OTLP エンドポイントへ 1 span 分のトレースを POST する。
-/// WebView の fetch() は CORS で阻まれる可能性があるため Rust 側から送る。
-/// 失敗時はエラー文字列を返すが、呼び出し側（JS）で握り潰して本流に影響させない前提。
+/// WebView の fetch() は LangSmith の OTLP エンドポイントの CORS で阻まれる
+/// 可能性があるため Rust 側から送る。失敗は JS 側で握り潰す前提。
 #[tauri::command]
 async fn post_langsmith_trace(
     endpoint: String,
@@ -129,10 +128,13 @@ async fn post_langsmith_trace(
     project: String,
     body: String,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    static LANGSMITH_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = LANGSMITH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("failed to build reqwest client for LangSmith")
+    });
 
     let res = client
         .post(&endpoint)

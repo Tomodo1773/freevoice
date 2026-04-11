@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logWarn } from "./diagLog";
+import { formatError } from "./errors";
 import { FormatProvider, LangsmithRegion, ReasoningEffort } from "./types";
 
 const LANGSMITH_ENDPOINTS: Record<LangsmithRegion, string> = {
@@ -154,7 +155,6 @@ export function buildFormatSpanPayload(
 }
 
 export interface SendFormatSpanArgs extends FormatSpanParams {
-  enabled: boolean;
   region: LangsmithRegion;
   project: string;
   apiKey: string;
@@ -165,9 +165,8 @@ export interface SendFormatSpanArgs extends FormatSpanParams {
  * 失敗はログ出力のみで握り潰し、アプリ本体の動作には影響させない。
  */
 export async function sendFormatSpan(args: SendFormatSpanArgs): Promise<void> {
-  if (!args.enabled) return;
   if (!args.apiKey || !args.project) {
-    logWarn("langsmith", "trace skipped: missing api key or project");
+    logWarn("langsmith", "trace skipped", { reason: "missing api key or project" });
     return;
   }
   try {
@@ -180,6 +179,6 @@ export async function sendFormatSpan(args: SendFormatSpanArgs): Promise<void> {
       body,
     });
   } catch (e) {
-    logWarn("langsmith", "trace send failed", { error: String(e) });
+    logWarn("langsmith", "trace send failed", { error: formatError(e) });
   }
 }
