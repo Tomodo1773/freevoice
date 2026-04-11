@@ -22,7 +22,6 @@ import { useSettings } from "./useSettings";
 import { AppSettings, FormatProvider, InputMethod, LangsmithRegion, ReasoningEffort, TranscriptionProvider } from "./types";
 import { buildFormatRequest } from "./postprocess";
 import { logWarn, logError } from "./diagLog";
-import { formatError } from "./errors";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 const ENDPOINT_SAMPLE = "https://your-resource.services.ai.azure.com/api/projects/your-project";
@@ -68,13 +67,13 @@ export default function App() {
       if (langsmithApiKey) setLangsmithApiKeyInput(langsmithApiKey);
     });
     isEnabled().then(setAutostartEnabled).catch((e) =>
-      logWarn("app.init", "autostart isEnabled failed", { error: formatError(e) })
+      logWarn("app.init", "autostart isEnabled failed", { error: e })
     );
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
       setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
     }).catch((e) =>
-      logWarn("app.init", "enumerateDevices failed", { error: formatError(e) })
+      logWarn("app.init", "enumerateDevices failed", { error: e })
     );
   }, []);
 
