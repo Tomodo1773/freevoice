@@ -58,6 +58,7 @@ export default function App() {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [page, setPage] = useState<"basic" | "model" | "prompt" | "history">("basic");
   const [version, setVersion] = useState("");
+  const [defaultLogDir, setDefaultLogDir] = useState("");
 
   useEffect(() => {
     migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey }) => {
@@ -74,6 +75,9 @@ export default function App() {
       setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
     }).catch((e) =>
       logWarn("app.init", "enumerateDevices failed", { error: e })
+    );
+    invoke<string>("get_app_log_dir").then(setDefaultLogDir).catch((e) =>
+      logWarn("app.init", "get_app_log_dir failed", { error: e })
     );
   }, []);
 
@@ -272,9 +276,14 @@ export default function App() {
                   onChange={(e) => handleChange("logFolder", e.target.value)}
                   placeholder="例: C:\Users\you\Documents\FreeVoiceLogs（空欄でデフォルト）"
                 />
-                <Text size="1" color="gray" mt="1">
-                  空欄の場合、%LOCALAPPDATA%\com.freevoice.app\logs に自動保存されます。
+                <Text size="1" color="gray" mt="1" as="p">
+                  空欄の場合、文字起こし結果のログも下記のアプリ既定フォルダに出力されます。
                 </Text>
+                {defaultLogDir && (
+                  <Text size="1" color="gray" mt="1" as="p">
+                    エラーログ・診断ログの出力先（設定に関わらず常時）: <code>{defaultLogDir}</code>
+                  </Text>
+                )}
               </Box>
 
               <Box>
