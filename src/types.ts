@@ -6,6 +6,8 @@ export type TranscriptionProvider = "azure-openai" | "azure-speech";
 
 export type FormatProvider = "azure" | "openai";
 
+export type LangsmithRegion = "us" | "eu";
+
 export interface AppSettings {
   shortcut: string;
   endpoint: string;
@@ -22,6 +24,10 @@ export interface AppSettings {
   audioDeviceId: string;
   azureFormatModel: string;
   openaiFormatModel: string;
+  langsmithEnabled: boolean;
+  langsmithProject: string;
+  langsmithRegion: LangsmithRegion;
+  langsmithIncludeContent: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -58,4 +64,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   speechEndpoint: "",
   speechLanguage: "ja-JP",
   audioDeviceId: "",
+  langsmithEnabled: false,
+  langsmithProject: "freevoice",
+  langsmithRegion: "us",
+  langsmithIncludeContent: true,
 };

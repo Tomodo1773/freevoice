@@ -3,7 +3,7 @@ import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
+import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, setLangsmithApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import {
   Box,
   Button,
@@ -19,7 +19,7 @@ import {
 } from "@radix-ui/themes";
 import History from "./History";
 import { useSettings } from "./useSettings";
-import { AppSettings, FormatProvider, InputMethod, ReasoningEffort, TranscriptionProvider } from "./types";
+import { AppSettings, FormatProvider, InputMethod, LangsmithRegion, ReasoningEffort, TranscriptionProvider } from "./types";
 import { buildFormatRequest } from "./postprocess";
 import { logWarn, logError } from "./diagLog";
 import { formatError } from "./errors";
@@ -48,6 +48,7 @@ export default function App() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [azureFormatApiKeyInput, setAzureFormatApiKeyInput] = useState("");
   const [openaiFormatApiKeyInput, setOpenaiFormatApiKeyInput] = useState("");
+  const [langsmithApiKeyInput, setLangsmithApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
@@ -60,10 +61,11 @@ export default function App() {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
-    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey }) => {
+    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey }) => {
       if (apiKey) setApiKeyInput(apiKey);
       if (azureFormatApiKey) setAzureFormatApiKeyInput(azureFormatApiKey);
       if (openaiFormatApiKey) setOpenaiFormatApiKeyInput(openaiFormatApiKey);
+      if (langsmithApiKey) setLangsmithApiKeyInput(langsmithApiKey);
     });
     isEnabled().then(setAutostartEnabled).catch((e) =>
       logWarn("app.init", "autostart isEnabled failed", { error: formatError(e) })
@@ -93,6 +95,7 @@ export default function App() {
     await setApiKey(apiKeyInput);
     await setAzureFormatApiKey(azureFormatApiKeyInput);
     await setOpenaiFormatApiKey(openaiFormatApiKeyInput);
+    await setLangsmithApiKey(langsmithApiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
     } catch (e) {
@@ -523,6 +526,88 @@ export default function App() {
                     <Select.Item value="high">high</Select.Item>
                   </Select.Content>
                 </Select.Root>
+              </Box>
+
+              <Heading size="3" mt="4">LangSmith トレース</Heading>
+
+              <Box>
+                <Text as="label" className="field-label">
+                  有効
+                </Text>
+                <Flex align="center" gap="2">
+                  <Switch
+                    checked={form.langsmithEnabled}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) => ({ ...prev, langsmithEnabled: checked }))
+                    }
+                  />
+                  <Text size="2" color="gray">
+                    フォーマット呼び出しを LangSmith にトレース送信する
+                  </Text>
+                </Flex>
+                <Text size="1" color="gray" mt="1" as="p">
+                  API キーは <a href="https://smith.langchain.com/settings" target="_blank" rel="noreferrer">LangSmith Settings</a> から取得できます。
+                </Text>
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="langsmithApiKey">
+                  API Key
+                </Text>
+                <TextField.Root
+                  id="langsmithApiKey"
+                  type="password"
+                  value={langsmithApiKeyInput}
+                  onChange={(e) => setLangsmithApiKeyInput(e.target.value)}
+                  placeholder="lsv2_..."
+                />
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="langsmithProject">
+                  Project
+                </Text>
+                <TextField.Root
+                  id="langsmithProject"
+                  value={form.langsmithProject}
+                  onChange={(e) => handleChange("langsmithProject", e.target.value)}
+                  placeholder="freevoice"
+                />
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label" htmlFor="langsmithRegion">
+                  リージョン
+                </Text>
+                <Select.Root
+                  value={form.langsmithRegion}
+                  onValueChange={(v) =>
+                    setForm((prev) => ({ ...prev, langsmithRegion: v as LangsmithRegion }))
+                  }
+                >
+                  <Select.Trigger id="langsmithRegion" style={{ width: "100%" }} />
+                  <Select.Content>
+                    <Select.Item value="us">US (api.smith.langchain.com)</Select.Item>
+                    <Select.Item value="eu">EU (eu.api.smith.langchain.com)</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Box>
+
+              <Box>
+                <Text as="label" className="field-label">
+                  プロンプト・応答本文を含める
+                </Text>
+                <Flex align="center" gap="2">
+                  <Switch
+                    checked={form.langsmithIncludeContent}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) => ({ ...prev, langsmithIncludeContent: checked }))
+                    }
+                  />
+                  <Text size="2" color="gray">
+                    文字起こしとフォーマット結果をトレースに含める（エバリュエーション用）
+                  </Text>
+                </Flex>
               </Box>
 
               {testStatus === "ok" && (

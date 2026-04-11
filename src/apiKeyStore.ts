@@ -5,6 +5,7 @@ const API_KEY_KEY = "apiKey";
 const FORMAT_API_KEY_KEY = "formatApiKey";
 const AZURE_FORMAT_API_KEY_KEY = "azureFormatApiKey";
 const OPENAI_FORMAT_API_KEY_KEY = "openaiFormatApiKey";
+const LANGSMITH_API_KEY_KEY = "langsmithApiKey";
 
 let storePromise: ReturnType<typeof load> | null = null;
 
@@ -33,6 +34,8 @@ export const getAzureFormatApiKey = () => getValue(AZURE_FORMAT_API_KEY_KEY);
 export const setAzureFormatApiKey = (key: string) => setValue(AZURE_FORMAT_API_KEY_KEY, key);
 export const getOpenaiFormatApiKey = () => getValue(OPENAI_FORMAT_API_KEY_KEY);
 export const setOpenaiFormatApiKey = (key: string) => setValue(OPENAI_FORMAT_API_KEY_KEY, key);
+export const getLangsmithApiKey = () => getValue(LANGSMITH_API_KEY_KEY);
+export const setLangsmithApiKey = (key: string) => setValue(LANGSMITH_API_KEY_KEY, key);
 
 /** マイグレーション: 旧 formatApiKey が存在すれば azureFormatApiKey へ移行 */
 export async function migrateFormatApiKey(): Promise<void> {
@@ -49,6 +52,7 @@ export async function getAllApiKeys(): Promise<{
   apiKey: string;
   azureFormatApiKey: string;
   openaiFormatApiKey: string;
+  langsmithApiKey: string;
 }> {
   const store = await getStore();
   await store.reload();
@@ -56,6 +60,7 @@ export async function getAllApiKeys(): Promise<{
     apiKey: (await store.get<string>(API_KEY_KEY)) ?? "",
     azureFormatApiKey: (await store.get<string>(AZURE_FORMAT_API_KEY_KEY)) ?? "",
     openaiFormatApiKey: (await store.get<string>(OPENAI_FORMAT_API_KEY_KEY)) ?? "",
+    langsmithApiKey: (await store.get<string>(LANGSMITH_API_KEY_KEY)) ?? "",
   };
 }
 
