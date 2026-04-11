@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logWarn } from "./diagLog";
-import { formatError } from "./errors";
 import { FormatProvider, LangsmithRegion, ReasoningEffort } from "./types";
 
 const LANGSMITH_ENDPOINTS: Record<LangsmithRegion, string> = {
@@ -179,6 +178,6 @@ export async function sendFormatSpan(args: SendFormatSpanArgs): Promise<void> {
       body,
     });
   } catch (e) {
-    logWarn("langsmith", "trace send failed", { error: formatError(e) });
+    logWarn("langsmith", "trace send failed", { error: e });
   }
 }

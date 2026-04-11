@@ -119,6 +119,23 @@ fn append_diag_log(
     write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
 }
 
+/// Rust 内部用のログヘルパ。`write_diag_log_internal` の失敗は診断情報なので握り潰す。
+fn diag_log(app: &AppHandle, level: &str, source: &str, message: &str) {
+    let _ = write_diag_log_internal(app, level, source, message, None);
+}
+
+/// エラー情報付きで診断ログを記録する。`err` の文字列を JSON 風の `{"error":"..."}` に整形。
+fn diag_log_err(
+    app: &AppHandle,
+    level: &str,
+    source: &str,
+    message: &str,
+    err: impl std::fmt::Display,
+) {
+    let ctx = format!("{{\"error\":{:?}}}", err.to_string());
+    let _ = write_diag_log_internal(app, level, source, message, Some(&ctx));
+}
+
 /// WebView の fetch() は LangSmith の OTLP エンドポイントの CORS で阻まれる
 /// 可能性があるため Rust 側から送る。失敗は JS 側で握り潰す前提。
 #[tauri::command]
@@ -352,23 +369,23 @@ async fn update_shortcut(
             match event.state() {
                 ShortcutState::Pressed => {
                     if let Err(e) = app_handle.emit("recording-start", ()) {
-                        let _ = write_diag_log_internal(
+                        diag_log_err(
                             &app_handle,
                             "ERROR",
                             "shortcut.press",
                             "emit recording-start failed",
-                            Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                            e,
                         );
                     }
                 }
                 ShortcutState::Released => {
                     if let Err(e) = app_handle.emit("recording-stop", ()) {
-                        let _ = write_diag_log_internal(
+                        diag_log_err(
                             &app_handle,
                             "ERROR",
                             "shortcut.release",
                             "emit recording-stop failed",
-                            Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                            e,
                         );
                     }
                 }
@@ -377,13 +394,7 @@ async fn update_shortcut(
         .map_err(|e| e.to_string())?;
 
     *shortcut_state.current.lock().unwrap() = shortcut;
-    let _ = write_diag_log_internal(
-        &app,
-        "INFO",
-        "shortcut.update",
-        "shortcut changed",
-        None,
-    );
+    diag_log(&app, "INFO", "shortcut.update", "shortcut changed");
     Ok(())
 }
 
@@ -429,8 +440,7 @@ pub fn run() {
         })
         .setup(|app| {
             // 起動マーカー（以降の記録が同一プロセスのものか判別するため）
-            let handle = app.handle().clone();
-            let _ = write_diag_log_internal(&handle, "INFO", "app.setup", "startup", None);
+            diag_log(app.handle(), "INFO", "app.setup", "startup");
 
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
@@ -443,13 +453,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "restart" => {
                         if let Err(e) = app.global_shortcut().unregister_all() {
-                            let _ = write_diag_log_internal(
-                                app,
-                                "WARN",
-                                "tray.restart",
-                                "unregister_all failed",
-                                Some(&format!("{{\"error\":{:?}}}", e.to_string())),
-                            );
+                            diag_log_err(app, "WARN", "tray.restart", "unregister_all failed", e);
                         }
                         app.restart();
                     }
@@ -457,22 +461,10 @@ pub fn run() {
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
                             if let Err(e) = w.show() {
-                                let _ = write_diag_log_internal(
-                                    app,
-                                    "WARN",
-                                    "tray.settings",
-                                    "show failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
-                                );
+                                diag_log_err(app, "WARN", "tray.settings", "show failed", e);
                             }
                             if let Err(e) = w.set_focus() {
-                                let _ = write_diag_log_internal(
-                                    app,
-                                    "WARN",
-                                    "tray.settings",
-                                    "set_focus failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
-                                );
+                                diag_log_err(app, "WARN", "tray.settings", "set_focus failed", e);
                             }
                         }
                     }
@@ -487,22 +479,10 @@ pub fn run() {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
                             if let Err(e) = w.show() {
-                                let _ = write_diag_log_internal(
-                                    app,
-                                    "WARN",
-                                    "tray.doubleclick",
-                                    "show failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
-                                );
+                                diag_log_err(app, "WARN", "tray.doubleclick", "show failed", e);
                             }
                             if let Err(e) = w.set_focus() {
-                                let _ = write_diag_log_internal(
-                                    app,
-                                    "WARN",
-                                    "tray.doubleclick",
-                                    "set_focus failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
-                                );
+                                diag_log_err(app, "WARN", "tray.doubleclick", "set_focus failed", e);
                             }
                         }
                     }
@@ -517,17 +497,16 @@ pub fn run() {
             // 設定画面を閉じたときは破棄せず非表示にする（2回目以降も開けるように）
             if let Some(main_win) = app.get_webview_window("main") {
                 let main_win_clone = main_win.clone();
-                let app_for_close = app.handle().clone();
                 main_win.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         if let Err(e) = main_win_clone.hide() {
-                            let _ = write_diag_log_internal(
-                                &app_for_close,
+                            diag_log_err(
+                                main_win_clone.app_handle(),
                                 "WARN",
                                 "main_win.close",
                                 "hide failed",
-                                Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                e,
                             );
                         }
                     }
@@ -540,23 +519,23 @@ pub fn run() {
                     match event.state() {
                         ShortcutState::Pressed => {
                             if let Err(e) = app_handle.emit("recording-start", ()) {
-                                let _ = write_diag_log_internal(
+                                diag_log_err(
                                     &app_handle,
                                     "ERROR",
                                     "shortcut.press",
                                     "emit recording-start failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                    e,
                                 );
                             }
                         }
                         ShortcutState::Released => {
                             if let Err(e) = app_handle.emit("recording-stop", ()) {
-                                let _ = write_diag_log_internal(
+                                diag_log_err(
                                     &app_handle,
                                     "ERROR",
                                     "shortcut.release",
                                     "emit recording-stop failed",
-                                    Some(&format!("{{\"error\":{:?}}}", e.to_string())),
+                                    e,
                                 );
                             }
                         }

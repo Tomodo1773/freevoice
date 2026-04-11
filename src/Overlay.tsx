@@ -78,7 +78,7 @@ export default function Overlay() {
   useEffect(() => {
     logInfo("overlay.init", "overlay window initialized");
     migrateFormatApiKey().catch((e) =>
-      logWarn("overlay.init", "migrateFormatApiKey failed", { error: formatError(e) })
+      logWarn("overlay.init", "migrateFormatApiKey failed", { error: e })
     );
     // 古いログフォルダを起動時にクリーンアップ
     (async () => {
@@ -93,13 +93,13 @@ export default function Overlay() {
 
     const appWindow = getCurrentWebviewWindow();
     appWindow.setFocusable(false).catch((e) =>
-      logWarn("overlay.init", "setFocusable failed", { error: formatError(e) })
+      logWarn("overlay.init", "setFocusable failed", { error: e })
     );
     invoke("set_click_through").catch((e) =>
-      logWarn("overlay.init", "set_click_through failed", { error: formatError(e) })
+      logWarn("overlay.init", "set_click_through failed", { error: e })
     );
     invoke("position_overlay").catch((e) =>
-      logWarn("overlay.init", "position_overlay failed", { error: formatError(e) })
+      logWarn("overlay.init", "position_overlay failed", { error: e })
     );
 
     // In React StrictMode (dev), effects can mount/unmount twice.
@@ -241,10 +241,10 @@ export default function Overlay() {
       (async () => {
         await Promise.all([
           appWindow.setFocusable(false).catch((e) =>
-            logWarn("overlay.handleStart", "setFocusable failed", { error: formatError(e) })
+            logWarn("overlay.handleStart", "setFocusable failed", { error: e })
           ),
           invoke("position_overlay").catch((e) =>
-            logWarn("overlay.handleStart", "position_overlay failed", { error: formatError(e) })
+            logWarn("overlay.handleStart", "position_overlay failed", { error: e })
           ),
         ]);
         await appWindow.show();
@@ -263,7 +263,7 @@ export default function Overlay() {
     sessionRef.current = session;
 
     invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) =>
-      logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: formatError(e) })
+      logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: e })
     );
 
     try {
@@ -281,7 +281,7 @@ export default function Overlay() {
     } catch (e) {
       sessionRef.current = null;
       invoke("set_system_audio_mute", { mute: false }).catch((muteErr: unknown) =>
-        logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: formatError(muteErr) })
+        logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: muteErr })
       );
       logError("overlay.handleStart", "session.start failed", e, {
         provider: settings.transcriptionProvider,
@@ -299,7 +299,7 @@ export default function Overlay() {
 
     logInfo("overlay.handleStop", "stop");
     invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) =>
-      logWarn("overlay.handleStop", "set_system_audio_mute(false) failed", { error: formatError(e) })
+      logWarn("overlay.handleStop", "set_system_audio_mute(false) failed", { error: e })
     );
 
     const settings = cachedSettingsRef.current;
@@ -317,11 +317,8 @@ export default function Overlay() {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
         abortRef.current = null;
-        if (session.wasSilent) {
-          logInfo("overlay.handleStop", "empty transcript (silent)");
-        } else {
-          logWarn("overlay.handleStop", "empty transcript non-silent", { silent: false });
-        }
+        const logEmpty = session.wasSilent ? logInfo : logWarn;
+        logEmpty("overlay.handleStop", "empty transcript", { silent: session.wasSilent });
         dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
         return;
       }
