@@ -166,8 +166,6 @@ export default function Overlay() {
     }
   }, [transcript]);
 
-  // エラー詳細はログファイルに出力されるため、クリップボードコピーは不要
-
   // hideRequest を監視してフェード開始タイマーを起動
   useEffect(() => {
     if (!hideRequest) return;
