@@ -91,10 +91,6 @@ export default function Overlay() {
       }
     })();
 
-    const appWindow = getCurrentWebviewWindow();
-    appWindow.setFocusable(false).catch((e) =>
-      logWarn("overlay.init", "setFocusable failed", { error: e })
-    );
     invoke("set_click_through").catch((e) =>
       logWarn("overlay.init", "set_click_through failed", { error: e })
     );
@@ -239,14 +235,9 @@ export default function Overlay() {
     // オーバーレイ表示と getUserMedia を並列実行（100-300ms短縮）
     const [, mediaStream] = await Promise.all([
       (async () => {
-        await Promise.all([
-          appWindow.setFocusable(false).catch((e) =>
-            logWarn("overlay.handleStart", "setFocusable failed", { error: e })
-          ),
-          invoke("position_overlay").catch((e) =>
-            logWarn("overlay.handleStart", "position_overlay failed", { error: e })
-          ),
-        ]);
+        await invoke("position_overlay").catch((e) =>
+          logWarn("overlay.handleStart", "position_overlay failed", { error: e })
+        );
         await appWindow.show();
       })(),
       navigator.mediaDevices.getUserMedia({
