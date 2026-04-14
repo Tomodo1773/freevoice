@@ -16,7 +16,7 @@
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "@tauri-apps/plugin-global-shortcut": "^2",
     "@tauri-apps/plugin-store": "^2",
-    "microsoft-cognitiveservices-speech-sdk": "^1.43.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.49.0",
     "react": "^19",
     "react-dom": "^19"
   },
@@ -27,7 +27,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.1",
     "typescript": "^5",
-    "vite": "^8.0.3",
-    "vitest": "^4.1.2"
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
   }
 }
