@@ -72,7 +72,18 @@ export default function App() {
     );
     getVersion().then(setVersion);
     navigator.mediaDevices.enumerateDevices().then((devices) => {
-      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+      const inputs = devices.filter((d) => d.kind === "audioinput");
+      setAudioDevices(inputs);
+      // 保存済み audioDeviceId が現在のデバイス一覧に存在しなければデフォルトに戻す。
+      // Windows Update 等で deviceId のハッシュが失効すると getUserMedia が hang するため。
+      setForm((prev) => {
+        if (!prev.audioDeviceId) return prev;
+        if (inputs.some((d) => d.deviceId === prev.audioDeviceId)) return prev;
+        const next = { ...prev, audioDeviceId: "" };
+        saveSettings(next);
+        logWarn("app.init", "saved audioDeviceId not found, cleared", { audioDeviceId: prev.audioDeviceId });
+        return next;
+      });
     }).catch((e) =>
       logWarn("app.init", "enumerateDevices failed", { error: e })
     );

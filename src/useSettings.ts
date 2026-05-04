@@ -26,11 +26,17 @@ function normalizeSettings(raw: Partial<AppSettings> & { postprocessModel?: stri
   return merged;
 }
 
+/** localStorage への書き込みのみ行う純粋関数。
+ *  Overlay ウィンドウ等、React フック外からも設定を永続化する必要がある場合に使う。 */
+export function persistSettings(next: AppSettings): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+}
+
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
 
   const saveSettings = (next: AppSettings) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    persistSettings(next);
     setSettings(next);
   };
 

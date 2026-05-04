@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry } from "./postprocess";
 import { sendFormatSpan } from "./langsmithTrace";
-import { loadSettings } from "./useSettings";
+import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
 import { formatError } from "./errors";
@@ -218,44 +218,64 @@ export default function Overlay() {
     oscillator.stop(ctx.currentTime + 0.08);
     oscillator.onended = () => ctx.close();
 
-    const settings = loadSettings();
-    const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
-    cachedSettingsRef.current = settings;
-    cachedApiKeyRef.current = apiKey;
-    cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
-    cachedLangsmithApiKeyRef.current = langsmithApiKey;
-    setAudioLevel(0);
-    setSilentWarn(false);
-    silentSinceRef.current = null;
-
-    const appWindow = getCurrentWebviewWindow();
-
-    // オーバーレイ表示と getUserMedia を並列実行（100-300ms短縮）
-    const [, mediaStream] = await Promise.all([
-      (async () => {
-        await invoke("position_overlay").catch((e) =>
-          logWarn("overlay.handleStart", "position_overlay failed", { error: e })
-        );
-        await appWindow.show();
-      })(),
-      navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          noiseSuppression: true,
-          echoCancellation: true,
-          ...(settings.audioDeviceId ? { deviceId: { exact: settings.audioDeviceId } } : {}),
-        },
-      }),
-    ]);
-
-    const session = new TranscriptionSession();
-    sessionRef.current = session;
-
-    invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) =>
-      logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: e })
-    );
-
+    let mediaStream: MediaStream | null = null;
+    let settings = cachedSettingsRef.current;
     try {
+      settings = loadSettings();
+      const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
+      cachedSettingsRef.current = settings;
+      cachedApiKeyRef.current = apiKey;
+      cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
+      cachedLangsmithApiKeyRef.current = langsmithApiKey;
+      setAudioLevel(0);
+      setSilentWarn(false);
+      silentSinceRef.current = null;
+
+      // 保存済み audioDeviceId が現在のデバイス一覧に存在するか検証。
+      // 失効していると getUserMedia が WebView2 で hang するため、空に戻して localStorage を自己治癒する。
+      let effectiveDeviceId = settings.audioDeviceId;
+      if (effectiveDeviceId) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const exists = devices.some((d) => d.kind === "audioinput" && d.deviceId === effectiveDeviceId);
+        if (!exists) {
+          logWarn("overlay.handleStart", "saved audioDeviceId not found, falling back to default", {
+            audioDeviceId: effectiveDeviceId,
+          });
+          effectiveDeviceId = "";
+          settings = { ...settings, audioDeviceId: "" };
+          persistSettings(settings);
+          cachedSettingsRef.current = settings;
+        }
+      }
+
+      const appWindow = getCurrentWebviewWindow();
+
+      // オーバーレイ表示と getUserMedia を並列実行（100-300ms短縮）
+      const [, ms] = await Promise.all([
+        (async () => {
+          await invoke("position_overlay").catch((e) =>
+            logWarn("overlay.handleStart", "position_overlay failed", { error: e })
+          );
+          await appWindow.show();
+        })(),
+        navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            noiseSuppression: true,
+            echoCancellation: true,
+            ...(effectiveDeviceId ? { deviceId: { exact: effectiveDeviceId } } : {}),
+          },
+        }),
+      ]);
+      mediaStream = ms;
+
+      const session = new TranscriptionSession();
+      sessionRef.current = session;
+
+      invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) =>
+        logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: e })
+      );
+
       await session.start({
         provider: settings.transcriptionProvider,
         endpoint: settings.endpoint,
@@ -263,16 +283,20 @@ export default function Overlay() {
         model: settings.transcriptionModel,
         speechEndpoint: settings.speechEndpoint,
         speechLanguage: settings.speechLanguage,
-        audioDeviceId: settings.audioDeviceId,
+        audioDeviceId: effectiveDeviceId,
         mediaStream,
         onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
       });
     } catch (e) {
-      sessionRef.current = null;
-      invoke("set_system_audio_mute", { mute: false }).catch((muteErr: unknown) =>
-        logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: muteErr })
-      );
-      logError("overlay.handleStart", "session.start failed", e, {
+      // セッション作成済みならミュート解除。MediaStream が掴まれていれば確実に解放。
+      if (sessionRef.current) {
+        sessionRef.current = null;
+        invoke("set_system_audio_mute", { mute: false }).catch((muteErr: unknown) =>
+          logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: muteErr })
+        );
+      }
+      mediaStream?.getTracks().forEach((t) => t.stop());
+      logError("overlay.handleStart", "start failed", e, {
         provider: settings.transcriptionProvider,
       });
       dispatch({ type: "RECORDING_FAILED", errorMsg: toUserMessage(e) });
