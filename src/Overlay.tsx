@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
-import { postprocessWithRetry } from "./postprocess";
+import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
 import { sendFormatSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
@@ -227,6 +227,8 @@ export default function Overlay() {
       cachedApiKeyRef.current = apiKey;
       cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
       cachedLangsmithApiKeyRef.current = langsmithApiKey;
+      // 整形APIへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）
+      warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
       setAudioLevel(0);
       setSilentWarn(false);
       silentSinceRef.current = null;

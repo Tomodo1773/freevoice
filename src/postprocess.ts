@@ -56,6 +56,21 @@ export function buildFormatRequest(
   };
 }
 
+/** 整形エンドポイントへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）。
+ *  接続確立だけが目的なので本文・認証は不要。失敗は無視する。 */
+export function warmupFormatConnection(
+  formatProvider: FormatProvider,
+  endpoint: string,
+): void {
+  try {
+    const { url } = buildFormatRequest(formatProvider, endpoint, "");
+    const origin = new URL(url).origin;
+    void fetch(origin, { method: "HEAD", mode: "no-cors" }).catch(() => {});
+  } catch {
+    // endpoint未設定など。ウォームアップ失敗は本処理に影響させない
+  }
+}
+
 export interface PostprocessUsage {
   input_tokens: number;
   output_tokens: number;
