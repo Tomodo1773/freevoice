@@ -165,8 +165,10 @@ export class TranscriptionSession {
       this.mediaStream?.getTracks().forEach((track) => track.stop());
       this.mediaStream = null;
       this.analyser = null;
+      // audioContext.close() は await せず投げっぱなしにして return を遅らせない。
+      // 解放対象は確定済みの最終テキストに影響せず、次回録音は新しい AudioContext を作る。
       if (this.audioContext) {
-        await this.audioContext.close().catch(() => {});
+        void this.audioContext.close().catch(() => {});
         this.audioContext = null;
       }
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
@@ -187,8 +189,9 @@ export class TranscriptionSession {
     this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
     this.analyser = null;
+    // azure-speech 分岐と同様、close 完了を待たず return をブロックしない
     if (this.audioContext) {
-      await this.audioContext.close().catch(() => {});
+      void this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
 
