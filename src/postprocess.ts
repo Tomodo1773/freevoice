@@ -34,19 +34,25 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export function buildFormatUrl(
+  formatProvider: FormatProvider,
+  endpoint: string,
+): string {
+  const base = formatProvider === "openai"
+    ? "https://api.openai.com/v1"
+    : endpoint.replace(/\/+$/, "");
+  return formatProvider === "azure"
+    ? `${base}/openai/v1/chat/completions`
+    : `${base}/chat/completions`;
+}
+
 export function buildFormatRequest(
   formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
 ): { url: string; headers: Record<string, string> } {
-  const base = formatProvider === "openai"
-    ? "https://api.openai.com/v1"
-    : endpoint.replace(/\/+$/, "");
-  const url = formatProvider === "azure"
-    ? `${base}/openai/v1/chat/completions`
-    : `${base}/chat/completions`;
   return {
-    url,
+    url: buildFormatUrl(formatProvider, endpoint),
     headers: {
       "Content-Type": "application/json",
       ...(formatProvider === "openai"
@@ -63,8 +69,7 @@ export function warmupFormatConnection(
   endpoint: string,
 ): void {
   try {
-    const { url } = buildFormatRequest(formatProvider, endpoint, "");
-    const origin = new URL(url).origin;
+    const origin = new URL(buildFormatUrl(formatProvider, endpoint)).origin;
     void fetch(origin, { method: "HEAD", mode: "no-cors" }).catch(() => {});
   } catch {
     // endpoint未設定など。ウォームアップ失敗は本処理に影響させない

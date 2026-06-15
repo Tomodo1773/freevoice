@@ -189,8 +189,9 @@ export class TranscriptionSession {
     this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
     this.analyser = null;
+    // azure-speech 分岐と同様、close 完了を待たず return をブロックしない
     if (this.audioContext) {
-      await this.audioContext.close().catch(() => {});
+      void this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
 
