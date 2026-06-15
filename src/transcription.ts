@@ -153,37 +153,36 @@ export class TranscriptionSession {
     this.getAudioLevel();
 
     if (this.provider === "azure-speech") {
-      // SDK を先に停止する（最終テキストの確定に必要）
+      // SDK を先に停止してからストリームを解放
       if (this.recognizer) {
         const recognizer = this.recognizer;
         await new Promise<void>((resolve, reject) => {
           recognizer.stopContinuousRecognitionAsync(resolve, reject);
         });
+        recognizer.close();
+        this.recognizer = null;
+      }
+      this.mediaStream?.getTracks().forEach((track) => track.stop());
+      this.mediaStream = null;
+      this.analyser = null;
+      // audioContext.close() は await せず投げっぱなしにして return を遅らせない。
+      // 解放対象は確定済みの最終テキストに影響せず、次回録音は新しい AudioContext を作る。
+      if (this.audioContext) {
+        void this.audioContext.close().catch(() => {});
+        this.audioContext = null;
       }
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
-      const finalText = this.recognizedTexts.join("") || this.lastInterimText;
-      if (!this.recognizedTexts.length && this.lastInterimText) {
+      const finalText = this.recognizedTexts.join("");
+      if (finalText) return finalText;
+      if (this.lastInterimText) {
         logWarn("transcription.stop", "azure-speech interim fallback used", {
           interimLen: this.lastInterimText.length,
         });
+        return this.lastInterimText;
       }
-      // 後片付けは非同期で行い、最終テキストの return をブロックしない。
-      // recognizedTexts / lastInterimText には影響しないため確定値取得後に実行して安全。
-      const recognizer = this.recognizer;
-      const mediaStream = this.mediaStream;
-      const audioContext = this.audioContext;
-      this.recognizer = null;
-      this.mediaStream = null;
-      this.analyser = null;
-      this.audioContext = null;
-      void (async () => {
-        recognizer?.close();
-        mediaStream?.getTracks().forEach((track) => track.stop());
-        await audioContext?.close().catch(() => {});
-      })();
-      return finalText;
+      return "";
     }
 
     // azure-openai パス
