@@ -148,6 +148,19 @@ export class TranscriptionSession {
     return this.peakAudioLevel < TranscriptionSession.SILENCE_THRESHOLD;
   }
 
+  /** mediaStream / analyser / audioContext を解放する。
+   *  audioContext.close() は await せず投げっぱなしにして return を遅らせない。
+   *  解放対象は確定済みの最終テキストに影響せず、次回録音は新しい AudioContext を作る。 */
+  private releaseAudioResources(): void {
+    this.mediaStream?.getTracks().forEach((track) => track.stop());
+    this.mediaStream = null;
+    this.analyser = null;
+    if (this.audioContext) {
+      void this.audioContext.close().catch(() => {});
+      this.audioContext = null;
+    }
+  }
+
   async stop(signal?: AbortSignal): Promise<string> {
     // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
@@ -162,15 +175,7 @@ export class TranscriptionSession {
         recognizer.close();
         this.recognizer = null;
       }
-      this.mediaStream?.getTracks().forEach((track) => track.stop());
-      this.mediaStream = null;
-      this.analyser = null;
-      // audioContext.close() は await せず投げっぱなしにして return を遅らせない。
-      // 解放対象は確定済みの最終テキストに影響せず、次回録音は新しい AudioContext を作る。
-      if (this.audioContext) {
-        void this.audioContext.close().catch(() => {});
-        this.audioContext = null;
-      }
+      this.releaseAudioResources();
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
@@ -186,14 +191,7 @@ export class TranscriptionSession {
     }
 
     // azure-openai パス
-    this.mediaStream?.getTracks().forEach((track) => track.stop());
-    this.mediaStream = null;
-    this.analyser = null;
-    // azure-speech 分岐と同様、close 完了を待たず return をブロックしない
-    if (this.audioContext) {
-      void this.audioContext.close().catch(() => {});
-      this.audioContext = null;
-    }
+    this.releaseAudioResources();
 
     const recorder = this.mediaRecorder;
     if (!recorder) throw new Error("録音セッションが開始されていません");

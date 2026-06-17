@@ -344,26 +344,27 @@ fn read_logs(folder: String, limit: usize) -> Result<Vec<String>, String> {
     Ok(results)
 }
 
+/// デフォルトのログフォルダ（`{app_local_data_dir}/logs`）を返す。
+fn default_log_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs"))
+}
+
 #[tauri::command]
 fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
-    app.path()
-        .app_local_data_dir()
-        .map(|p| p.join("logs").to_string_lossy().into_owned())
-        .map_err(|e| e.to_string())
+    Ok(default_log_dir(&app)?.to_string_lossy().into_owned())
 }
 
 /// ログフォルダをエクスプローラーで開く。
 /// `folder` が空（未設定）ならデフォルト（`{app_local_data_dir}/logs`）を開く。
 #[tauri::command]
-#[allow(unused_variables)]
 fn open_log_folder(app: AppHandle, folder: Option<String>) -> Result<(), String> {
     let path = match folder {
         Some(f) if !f.trim().is_empty() => PathBuf::from(f.trim()),
-        _ => app
-            .path()
-            .app_local_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("logs"),
+        _ => default_log_dir(&app)?,
     };
     // 履歴がまだ無いと既定フォルダが存在しないため、開く前に作成する
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
