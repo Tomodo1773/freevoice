@@ -12,7 +12,7 @@ importers:
         specifier: ^3.3.0
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tauri-apps/api':
-        specifier: ^2
+        specifier: ^2.11.0
         version: 2.11.0
       '@tauri-apps/plugin-autostart':
         specifier: ^2.5.1
