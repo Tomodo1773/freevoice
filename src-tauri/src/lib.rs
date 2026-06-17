@@ -344,6 +344,20 @@ fn read_logs(folder: String, limit: usize) -> Result<Vec<String>, String> {
     Ok(results)
 }
 
+/// ログフォルダをエクスプローラーで開く。存在しなければ作成してから開く。
+/// `path` には設定済みフォルダ、未設定ならデフォルトのログフォルダがフロントから渡される。
+#[tauri::command]
+fn open_log_folder(path: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&path);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
     app.path()
@@ -444,8 +458,9 @@ pub fn run() {
 
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
+            let open_log_item = MenuItem::with_id(app, "open_log", "ログを開く", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "再起動", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings_item, &restart_item, &quit])?;
+            let menu = Menu::with_items(app, &[&settings_item, &open_log_item, &restart_item, &quit])?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
@@ -458,6 +473,13 @@ pub fn run() {
                         app.restart();
                     }
                     "quit" => app.exit(0),
+                    "open_log" => {
+                        // ログフォルダの設定値は localStorage にありフロント側でしか解決できないため、
+                        // フロントにイベントを投げて解決とフォルダオープンを委譲する。
+                        if let Err(e) = app.emit("open-log-folder", ()) {
+                            diag_log_err(app, "WARN", "tray.open_log", "emit open-log-folder failed", e);
+                        }
+                    }
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
                             if let Err(e) = w.show() {
@@ -556,6 +578,7 @@ pub fn run() {
             save_log,
             read_logs,
             get_app_log_dir,
+            open_log_folder,
             cleanup_old_logs,
             set_system_audio_mute,
             append_diag_log,

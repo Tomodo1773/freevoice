@@ -1,6 +1,7 @@
 import { KeyboardEvent, useEffect, useState } from "react";
 import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, setLangsmithApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
@@ -18,7 +19,7 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import History from "./History";
-import { useSettings } from "./useSettings";
+import { useSettings, loadSettings } from "./useSettings";
 import { AppSettings, FormatProvider, InputMethod, LangsmithRegion, ReasoningEffort, TranscriptionProvider } from "./types";
 import { buildFormatRequest } from "./postprocess";
 import { logWarn, logError } from "./diagLog";
@@ -98,6 +99,25 @@ export default function App() {
         logError("app.init", "shortcut sync failed", e)
       );
     }
+  }, []);
+
+  // トレイの「ログを開く」からのイベントを受けてフォルダをエクスプローラーで開く。
+  // 設定済みフォルダがあればそれを、無ければデフォルトのログフォルダを開く。
+  // 保存後の最新値を使うため loadSettings() で localStorage から都度読み出す。
+  useEffect(() => {
+    const unlisten = listen("open-log-folder", async () => {
+      try {
+        const folder =
+          loadSettings().logFolder.trim() ||
+          (await invoke<string>("get_app_log_dir"));
+        await invoke("open_log_folder", { path: folder });
+      } catch (e) {
+        logError("tray.openLog", "open_log_folder failed", e);
+      }
+    });
+    return () => {
+      unlisten.then((un) => un());
+    };
   }, []);
 
   const handleChange = (field: keyof AppSettings, value: string) => {
