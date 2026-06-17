@@ -352,6 +352,29 @@ fn get_app_log_dir(app: AppHandle) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// ログフォルダをエクスプローラーで開く。
+/// `folder` が空（未設定）ならデフォルト（`{app_local_data_dir}/logs`）を開く。
+#[tauri::command]
+#[allow(unused_variables)]
+fn open_log_folder(app: AppHandle, folder: Option<String>) -> Result<(), String> {
+    let path = match folder {
+        Some(f) if !f.trim().is_empty() => PathBuf::from(f.trim()),
+        _ => app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("logs"),
+    };
+    // 履歴がまだ無いと既定フォルダが存在しないため、開く前に作成する
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn update_shortcut(
     app: AppHandle,
@@ -444,8 +467,9 @@ pub fn run() {
 
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
+            let open_logs_item = MenuItem::with_id(app, "open_logs", "ログを開く", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "再起動", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings_item, &restart_item, &quit])?;
+            let menu = Menu::with_items(app, &[&settings_item, &open_logs_item, &restart_item, &quit])?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
@@ -458,6 +482,11 @@ pub fn run() {
                         app.restart();
                     }
                     "quit" => app.exit(0),
+                    "open_logs" => {
+                        if let Err(e) = app.emit("open-log-folder", ()) {
+                            diag_log_err(app, "WARN", "tray.open_logs", "emit failed", e);
+                        }
+                    }
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
                             if let Err(e) = w.show() {
@@ -556,6 +585,7 @@ pub fn run() {
             save_log,
             read_logs,
             get_app_log_dir,
+            open_log_folder,
             cleanup_old_logs,
             set_system_audio_mute,
             append_diag_log,

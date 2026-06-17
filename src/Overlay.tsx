@@ -103,6 +103,7 @@ export default function Overlay() {
     let disposed = false;
     let unlistenStart: (() => void) | undefined;
     let unlistenStop: (() => void) | undefined;
+    let unlistenOpenLogs: (() => void) | undefined;
 
     (async () => {
       const u1 = await listen("recording-start", () => {
@@ -111,21 +112,31 @@ export default function Overlay() {
       const u2 = await listen("recording-stop", () => {
         handleStop();
       });
+      // トレイ「ログを開く」から発火。設定済みフォルダ（空ならデフォルト）を Rust で開く
+      const u3 = await listen("open-log-folder", () => {
+        const logFolder = loadSettings().logFolder.trim();
+        invoke("open_log_folder", { folder: logFolder }).catch((e) =>
+          logError("overlay.openLogFolder", "open_log_folder failed", e)
+        );
+      });
 
       if (disposed) {
         u1();
         u2();
+        u3();
         return;
       }
 
       unlistenStart = u1;
       unlistenStop = u2;
+      unlistenOpenLogs = u3;
     })();
 
     return () => {
       disposed = true;
       unlistenStart?.();
       unlistenStop?.();
+      unlistenOpenLogs?.();
     };
   }, []);
 
