@@ -289,6 +289,7 @@ export default function Overlay() {
         audioDeviceId: effectiveDeviceId,
         mediaStream,
         onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
+        onRecognitionError: (msg) => dispatch({ type: "RECORDING_FAILED", errorMsg: msg }),
       });
     } catch (e) {
       // セッション作成済みならミュート解除。MediaStream が掴まれていれば確実に解放。
