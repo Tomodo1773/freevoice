@@ -1,7 +1,7 @@
 import type * as SpeechSDKTypes from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 import { TranscriptionProvider } from "./types";
-import { logWarn } from "./diagLog";
+import { logInfo, logWarn, logError } from "./diagLog";
 
 function pickMimeType(): string {
   const candidates = [
@@ -23,6 +23,15 @@ function extensionForMimeType(mimeType: string): string {
   return "webm";
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), ms)
+    ),
+  ]);
+}
+
 export class TranscriptionSession {
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
@@ -31,17 +40,32 @@ export class TranscriptionSession {
   private analyser: AnalyserNode | null = null;
   private peakAudioLevel = 0;
   private static readonly SILENCE_THRESHOLD = 0.05;
+  private static readonly MAX_RECONNECTS = 3;
+  private static readonly RECONNECT_DELAY_MS = 1000;
+  private static readonly RECONNECT_TIMEOUT_MS = 5000;
+
   private provider: TranscriptionProvider = "azure-openai";
   private endpoint = "";
   private apiKey = "";
   private model = "";
   private speechEndpoint = "";
   private speechLanguage = "";
+  private audioDeviceId = "";
+  private onInterimResult?: (text: string) => void;
+  private onRecognitionError?: (message: string) => void;
+
+  private SpeechSDK: typeof SpeechSDKTypes | null = null;
   private recognizer: SpeechSDKTypes.SpeechRecognizer | null = null;
   private recognizedTexts: string[] = [];
   /** 最新の暫定テキスト。recognized（確定）で空にし、recognizing（暫定）で更新する。
    *  stop 時に recognized が間に合わない環境向けのフォールバック。 */
   private lastInterimText = "";
+
+  private stopping = false;
+  /** 初回 startRecognizer 成功後にのみ true。start() 中の canceled+reject 二重発火によるリークを防ぐ。 */
+  private reconnectEnabled = false;
+  private reconnectCount = 0;
+  private reconnectPromise: Promise<void> | null = null;
 
   async start(params: {
     provider: TranscriptionProvider;
@@ -53,6 +77,7 @@ export class TranscriptionSession {
     audioDeviceId?: string;
     mediaStream?: MediaStream;
     onInterimResult?: (text: string) => void;
+    onRecognitionError?: (message: string) => void;
   }): Promise<void> {
     this.provider = params.provider;
     this.endpoint = params.endpoint;
@@ -60,6 +85,9 @@ export class TranscriptionSession {
     this.model = params.model;
     this.speechEndpoint = params.speechEndpoint;
     this.speechLanguage = params.speechLanguage;
+    this.audioDeviceId = params.audioDeviceId ?? "";
+    this.onInterimResult = params.onInterimResult;
+    this.onRecognitionError = params.onRecognitionError;
 
     if (!this.apiKey) throw new Error("apiKey が未設定です");
     if (this.provider === "azure-openai") {
@@ -87,38 +115,14 @@ export class TranscriptionSession {
     this.peakAudioLevel = 0;
 
     if (this.provider === "azure-speech") {
-      const SpeechSDK = await import("microsoft-cognitiveservices-speech-sdk");
+      this.SpeechSDK = await import("microsoft-cognitiveservices-speech-sdk");
       this.recognizedTexts = [];
       this.lastInterimText = "";
-      const speechConfig = SpeechSDK.SpeechConfig.fromEndpoint(
-        new URL(this.speechEndpoint),
-        this.apiKey
-      );
-      speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
-      const audioConfig = params.audioDeviceId
-        ? SpeechSDK.AudioConfig.fromMicrophoneInput(params.audioDeviceId)
-        : SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
-      this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-      this.recognizer.recognizing = (_, e) => {
-        if (e.result.text) {
-          this.lastInterimText = e.result.text;
-          params.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
-        }
-      };
-      this.recognizer.recognized = (_, e) => {
-        if (
-          e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech &&
-          e.result.text
-        ) {
-          this.recognizedTexts.push(e.result.text);
-          this.lastInterimText = "";
-          params.onInterimResult?.(this.recognizedTexts.join(""));
-        }
-      };
-      const recognizer = this.recognizer;
-      await new Promise<void>((resolve, reject) => {
-        recognizer.startContinuousRecognitionAsync(resolve, reject);
-      });
+      this.stopping = false;
+      this.reconnectEnabled = false;
+      this.reconnectCount = 0;
+      await this.startRecognizer();
+      this.reconnectEnabled = true;
       return;
     }
 
@@ -131,6 +135,122 @@ export class TranscriptionSession {
       if (event.data.size > 0) this.chunks.push(event.data);
     };
     this.mediaRecorder.start(250);
+  }
+
+  /** recognizer を安全に閉じて null にする。close() の throwIfDisposed を吸収する。 */
+  private closeRecognizer(): void {
+    if (this.recognizer) {
+      try {
+        this.recognizer.close();
+      } catch {
+        // close() は既に dispose 済みの場合 throwIfDisposed でスローする
+      }
+      this.recognizer = null;
+    }
+  }
+
+  /** Azure Speech recognizer を作成・開始する。start() と attemptReconnect() の共通パス。 */
+  private async startRecognizer(): Promise<void> {
+    const SDK = this.SpeechSDK!;
+
+    const speechConfig = SDK.SpeechConfig.fromEndpoint(
+      new URL(this.speechEndpoint),
+      this.apiKey
+    );
+    speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
+
+    const audioConfig = this.audioDeviceId
+      ? SDK.AudioConfig.fromMicrophoneInput(this.audioDeviceId)
+      : SDK.AudioConfig.fromDefaultMicrophoneInput();
+
+    const recognizer = new SDK.SpeechRecognizer(speechConfig, audioConfig);
+
+    recognizer.recognizing = (_, e) => {
+      if (e.result.text) {
+        this.lastInterimText = e.result.text;
+        this.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
+      }
+    };
+
+    recognizer.recognized = (_, e) => {
+      if (
+        e.result.reason === SDK.ResultReason.RecognizedSpeech &&
+        e.result.text
+      ) {
+        this.recognizedTexts.push(e.result.text);
+        this.lastInterimText = "";
+        this.onInterimResult?.(this.recognizedTexts.join(""));
+      }
+    };
+
+    recognizer.canceled = (_, e) => {
+      if (this.stopping || !this.reconnectEnabled) return;
+      if (e.reason !== SDK.CancellationReason.Error) return;
+
+      const retryable =
+        e.errorCode === SDK.CancellationErrorCode.ConnectionFailure ||
+        e.errorCode === SDK.CancellationErrorCode.ServiceTimeout ||
+        e.errorCode === SDK.CancellationErrorCode.ServiceError ||
+        e.errorCode === SDK.CancellationErrorCode.RuntimeError;
+
+      if (!retryable || this.reconnectCount >= TranscriptionSession.MAX_RECONNECTS) {
+        logError("transcription.canceled", "recognition canceled (not retryable)", new Error(e.errorDetails ?? ""), {
+          errorCode: e.errorCode,
+          reconnectCount: this.reconnectCount,
+        });
+        this.onRecognitionError?.("音声認識が切断されました");
+        return;
+      }
+
+      if (this.reconnectPromise) return;
+      void this.attemptReconnect(e.errorCode, e.errorDetails ?? "");
+    };
+
+    this.recognizer = recognizer;
+
+    await new Promise<void>((resolve, reject) => {
+      recognizer.startContinuousRecognitionAsync(resolve, reject);
+    });
+  }
+
+  /** 一時的エラーからの再接続。蓄積テキストを保持し、暫定テキストを昇格させてから再開する。 */
+  private async attemptReconnect(errorCode: number, errorDetails: string): Promise<void> {
+    this.reconnectCount++;
+    logWarn("transcription.canceled", `reconnecting (${this.reconnectCount}/${TranscriptionSession.MAX_RECONNECTS})`, {
+      errorCode,
+      errorDetails,
+    });
+
+    if (this.lastInterimText) {
+      this.recognizedTexts.push(this.lastInterimText);
+      this.lastInterimText = "";
+      this.onInterimResult?.(this.recognizedTexts.join(""));
+    }
+
+    this.closeRecognizer();
+
+    this.reconnectPromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, TranscriptionSession.RECONNECT_DELAY_MS));
+      if (this.stopping) return;
+      try {
+        await this.startRecognizer();
+        this.reconnectCount = 0;
+        logInfo("transcription.canceled", "reconnected successfully");
+      } catch (e) {
+        logError("transcription.canceled", "reconnection failed", e, {
+          reconnectCount: this.reconnectCount,
+        });
+        this.closeRecognizer();
+        if (this.reconnectCount >= TranscriptionSession.MAX_RECONNECTS) {
+          this.onRecognitionError?.("音声認識が切断されました");
+        }
+      }
+    })();
+    try {
+      await this.reconnectPromise;
+    } finally {
+      this.reconnectPromise = null;
+    }
   }
 
   getAudioLevel(): number {
@@ -166,16 +286,27 @@ export class TranscriptionSession {
     this.getAudioLevel();
 
     if (this.provider === "azure-speech") {
-      // SDK を先に停止してからストリームを解放
-      if (this.recognizer) {
-        const recognizer = this.recognizer;
-        await new Promise<void>((resolve, reject) => {
-          recognizer.stopContinuousRecognitionAsync(resolve, reject);
-        });
-        recognizer.close();
-        this.recognizer = null;
+      this.stopping = true;
+
+      if (this.reconnectPromise) {
+        await withTimeout(this.reconnectPromise, TranscriptionSession.RECONNECT_TIMEOUT_MS)
+          .catch(() => {});
       }
+
+      if (this.recognizer) {
+        try {
+          const recognizer = this.recognizer;
+          await new Promise<void>((resolve, reject) => {
+            recognizer.stopContinuousRecognitionAsync(resolve, reject);
+          });
+        } catch {
+          // recognizer が不正な状態の場合 stopContinuousRecognitionAsync が失敗しうる
+        }
+      }
+      this.closeRecognizer();
+
       this.releaseAudioResources();
+
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
