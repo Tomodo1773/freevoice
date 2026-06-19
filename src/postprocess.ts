@@ -2,17 +2,17 @@ import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
 import { logWarn } from "./diagLog";
 
 export class PostprocessError extends Error {
+  public readonly retryable: boolean;
+
   constructor(
     message: string,
     public readonly status: number,
-    public readonly responseBody: string
+    public readonly responseBody: string,
+    retryable?: boolean,
   ) {
     super(message);
     this.name = "PostprocessError";
-  }
-
-  get retryable(): boolean {
-    return [429, 500, 502, 503].includes(this.status);
+    this.retryable = retryable ?? [429, 500, 502, 503].includes(status);
   }
 }
 
@@ -128,7 +128,11 @@ export async function postprocess(
   }
 
   const data = await res.json();
-  const text: string = data.choices?.[0]?.message?.content ?? transcript;
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new PostprocessError("後処理API 空の応答", res.status, "", true);
+  }
+  const text: string = content;
   const promptTokens = data.usage?.prompt_tokens;
   const completionTokens = data.usage?.completion_tokens;
   const usage: PostprocessUsage | undefined =
@@ -165,7 +169,9 @@ export async function postprocessWithRetry(
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
-        const reason = e.status === 401 || e.status === 403
+        const reason = e.status < 400
+          ? "空の応答"
+          : e.status === 401 || e.status === 403
           ? "認証エラー"
           : e.status === 404
           ? "エンドポイント不明"
