@@ -79,7 +79,7 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const recordingWindowRef = useRef<{ id: string; exe: string; title: string } | null>(null);
+  const recordingWindowPromiseRef = useRef<Promise<{ id: string; exe: string; title: string } | null> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedFormatApiKeyRef = useRef("");
   const cachedLangsmithApiKeyRef = useRef("");
@@ -213,7 +213,7 @@ export default function Overlay() {
 
     logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
-    recordingWindowRef.current = null;
+    recordingWindowPromiseRef.current = null;
 
     const now = new Date();
     // 録音開始音
@@ -242,14 +242,15 @@ export default function Overlay() {
       // 整形APIへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）
       warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
 
-      // 文脈スコープ用にフォアグラウンドウィンドウを取得（overlay 表示より前に確定させる）
+      // 文脈スコープ用にフォアグラウンドウィンドウを取得。await せず録音中に解決させ、
+      // overlay show + getUserMedia の並列化（クリティカルパス）を阻害しない。
       if (settings.contextAwareFormatting) {
-        try {
-          const fw = await invoke<{ id: string; exe: string; title: string }>("get_foreground_window");
-          if (fw.id) recordingWindowRef.current = { id: fw.id, exe: fw.exe, title: fw.title };
-        } catch (e) {
-          logWarn("overlay.handleStart", "get_foreground_window failed", { error: e });
-        }
+        recordingWindowPromiseRef.current = invoke<{ id: string; exe: string; title: string }>("get_foreground_window")
+          .then((fw) => (fw.id ? { id: fw.id, exe: fw.exe, title: fw.title } : null))
+          .catch((e) => {
+            logWarn("overlay.handleStart", "get_foreground_window failed", { error: e });
+            return null;
+          });
       }
 
       setAudioLevel(0);
@@ -343,8 +344,9 @@ export default function Overlay() {
 
     const settings = cachedSettingsRef.current;
 
-    // 録音開始時に確定したウィンドウと、それに紐づく話題コンテキスト
-    const win = settings.contextAwareFormatting ? recordingWindowRef.current : null;
+    // 録音開始時に起動したウィンドウ取得を解決（録音中に完了済みのはず）し、話題コンテキストを引く
+    const winPromise = recordingWindowPromiseRef.current;
+    const win = settings.contextAwareFormatting && winPromise ? await winPromise : null;
     const injectedContext = win ? getContext(win.id) : null;
 
     const now = new Date();
@@ -425,7 +427,7 @@ export default function Overlay() {
           endpoint: settings.formatEndpoint,
           apiKey: cachedFormatApiKeyRef.current,
           model: formatModel,
-          reasoningEffort: "low",
+          reasoningEffort: settings.reasoningEffort,
         });
       }
     } catch (e) {

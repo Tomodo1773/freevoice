@@ -95,6 +95,48 @@ export function buildContextMessage(context: string): { role: "user"; content: s
   };
 }
 
+export interface ChatCompletionResult {
+  content: string;
+  usage?: PostprocessUsage;
+  model?: string;
+}
+
+/** Chat Completions エンドポイントへ1回 POST し、本文と usage/model を取り出す。
+ *  整形（postprocess）と話題蒸留（windowContext）で共用。失敗は PostprocessError を投げる。 */
+export async function requestChatCompletion(
+  url: string,
+  headers: Record<string, string>,
+  body: object,
+  signal?: AbortSignal
+): Promise<ChatCompletionResult> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new PostprocessError(`後処理API エラー: ${res.status} ${text}`, res.status, text);
+  }
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new PostprocessError("後処理API 空の応答", res.status, "", true);
+  }
+  const promptTokens = data.usage?.prompt_tokens;
+  const completionTokens = data.usage?.completion_tokens;
+  const usage: PostprocessUsage | undefined =
+    typeof promptTokens === "number" && typeof completionTokens === "number"
+      ? { input_tokens: promptTokens, output_tokens: completionTokens }
+      : undefined;
+  const model: string | undefined =
+    typeof data.model === "string" ? data.model : undefined;
+  return { content, usage, model };
+}
+
 export async function postprocess(
   transcript: string,
   formatProvider: FormatProvider,
@@ -118,37 +160,13 @@ export async function postprocess(
     { role: "user", content: transcript },
   ];
 
-  const res = await fetch(url, {
-    method: "POST",
+  const { content, usage, model: responseModel } = await requestChatCompletion(
+    url,
     headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      reasoning_effort: reasoningEffort,
-    }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new PostprocessError(`後処理API エラー: ${res.status} ${text}`, res.status, text);
-  }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new PostprocessError("後処理API 空の応答", res.status, "", true);
-  }
-  const text: string = content;
-  const promptTokens = data.usage?.prompt_tokens;
-  const completionTokens = data.usage?.completion_tokens;
-  const usage: PostprocessUsage | undefined =
-    typeof promptTokens === "number" && typeof completionTokens === "number"
-      ? { input_tokens: promptTokens, output_tokens: completionTokens }
-      : undefined;
-  const responseModel: string | undefined =
-    typeof data.model === "string" ? data.model : undefined;
-  return { text, usage, model: responseModel };
+    { model, messages, reasoning_effort: reasoningEffort },
+    signal
+  );
+  return { text: content, usage, model: responseModel };
 }
 
 const RETRY_DELAYS = [1000, 3000];

@@ -1,4 +1,4 @@
-import { buildFormatRequest } from "./postprocess";
+import { buildFormatRequest, requestChatCompletion } from "./postprocess";
 import { FormatProvider, ReasoningEffort } from "./types";
 import { logInfo, logWarn } from "./diagLog";
 
@@ -78,6 +78,9 @@ const DISTILL_SYSTEM_PROMPT = `あなたは音声入力アシスタントの文�
 - 古くなって無関係になった話題は落とす
 - 前置きや説明を書かず、メモ本文のみを出力する`;
 
+/** 蒸留呼び出しのタイムアウト。接続スタール時に in-flight ガードが固着しないよう必ず中断する。 */
+const DISTILL_TIMEOUT_MS = 15000;
+
 /** 旧サマリと新しい整形済みテキストから、更新された話題サマリを生成する。 */
 export async function distillTopic(
   prev: string,
@@ -85,30 +88,29 @@ export async function distillTopic(
   config: DistillConfig,
 ): Promise<string> {
   const { url, headers } = buildFormatRequest(config.formatProvider, config.endpoint, config.apiKey);
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        { role: "system", content: DISTILL_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `これまでの話題メモ:\n${prev || "（なし）"}\n\n新しい発話:\n${formatted}`,
-        },
-      ],
-      reasoning_effort: config.reasoningEffort,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`蒸留API エラー: ${res.status}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DISTILL_TIMEOUT_MS);
+  try {
+    const { content } = await requestChatCompletion(
+      url,
+      headers,
+      {
+        model: config.model,
+        messages: [
+          { role: "system", content: DISTILL_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `これまでの話題メモ:\n${prev || "（なし）"}\n\n新しい発話:\n${formatted}`,
+          },
+        ],
+        reasoning_effort: config.reasoningEffort,
+      },
+      controller.signal
+    );
+    return content.trim();
+  } finally {
+    clearTimeout(timer);
   }
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("蒸留API 空の応答");
-  }
-  return content.trim();
 }
 
 /** paste 後に非同期で呼ぶ。旧サマリ＋整形済みテキストを蒸留して該当ウィンドウのサマリを更新する。

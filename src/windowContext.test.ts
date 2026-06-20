@@ -3,6 +3,7 @@ import {
   getContext,
   updateContext,
   withInFlightGuard,
+  distillTopic,
   _resetForTest,
 } from "./windowContext";
 
@@ -113,6 +114,37 @@ describe("windowContext", () => {
       ).rejects.toThrow("boom");
       // 解放済みなので再実行できる
       expect(await withInFlightGuard("w", async () => {})).toBe(true);
+    });
+  });
+
+  describe("distillTopic タイムアウト", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("応答しない接続はタイムアウトで中断され例外になる（ガード固着防止）", async () => {
+      // signal が abort されたら reject する、解決しない fetch をスタブ
+      const fetchMock = vi.fn().mockImplementation((_url: string, opts: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError"))
+          );
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const p = distillTopic("prev", "formatted", {
+        formatProvider: "openai",
+        endpoint: "",
+        apiKey: "k",
+        model: "m",
+        reasoningEffort: "low",
+      });
+      const assertion = expect(p).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(15000);
+      await assertion;
     });
   });
 });
