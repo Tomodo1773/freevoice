@@ -8,6 +8,8 @@ interface LogEntry {
   timestamp: string;
   transcription: string;
   formatted: string;
+  topic?: string;
+  window?: { exe: string; title: string };
   error?: string;
 }
 
@@ -102,6 +104,16 @@ export default function History() {
                   {copiedIdx === i ? "Copied!" : "Copy"}
                 </Button>
               </Flex>
+              {entry.window && (entry.window.exe || entry.window.title) && (
+                <Text size="1" color="gray">
+                  ウィンドウ: {[entry.window.exe, entry.window.title].filter(Boolean).join(" / ")}
+                </Text>
+              )}
+              {entry.topic && (
+                <Text size="1" color="gray" style={{ whiteSpace: "pre-wrap" }}>
+                  トピック: {entry.topic}
+                </Text>
+              )}
               <Text size="2" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                 {displayText}
               </Text>

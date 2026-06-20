@@ -87,6 +87,14 @@ export interface PostprocessResult {
   model?: string;
 }
 
+/** 文脈（話題サマリ）を user メッセージに整形する。整形 messages と蒸留呼び出しで共用。 */
+export function buildContextMessage(context: string): { role: "user"; content: string } {
+  return {
+    role: "user",
+    content: `今は次のトピックについて話しています。文字起こしの誤変換補正の参考にしてください。\n${context}`,
+  };
+}
+
 export async function postprocess(
   transcript: string,
   formatProvider: FormatProvider,
@@ -95,6 +103,7 @@ export async function postprocess(
   model: string,
   prompt: string,
   reasoningEffort: ReasoningEffort,
+  context?: string,
   signal?: AbortSignal
 ): Promise<PostprocessResult> {
   if (!transcript.trim()) return { text: transcript };
@@ -102,21 +111,19 @@ export async function postprocess(
 
   const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
 
+  // system は固定の「プログラム」として保ち、文脈は user メッセージとして渡す（評価のしやすさ優先）
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...(context?.trim() ? [buildContextMessage(context)] : []),
+    { role: "user", content: transcript },
+  ];
+
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
       model,
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: transcript,
-        },
-      ],
+      messages,
       reasoning_effort: reasoningEffort,
     }),
     signal,
@@ -160,11 +167,12 @@ export async function postprocessWithRetry(
   model: string,
   prompt: string,
   reasoningEffort: ReasoningEffort,
+  context?: string,
   signal?: AbortSignal
 ): Promise<PostprocessWithRetryResult> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, context, signal);
       return { ...result, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;

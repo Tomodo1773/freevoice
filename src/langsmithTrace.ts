@@ -45,6 +45,8 @@ export interface FormatSpanParams {
   requestModel: string;
   responseModel?: string;
   systemPrompt: string;
+  /** 整形に注入した話題コンテキスト（user メッセージ）。無ければ省略。 */
+  userContext?: string;
   userTranscript: string;
   completion?: string;
   reasoningEffort: ReasoningEffort;
@@ -90,8 +92,19 @@ export function buildFormatSpanPayload(
     attributes.push(
       strAttr("gen_ai.prompt.0.role", "system"),
       strAttr("gen_ai.prompt.0.content", params.systemPrompt),
-      strAttr("gen_ai.prompt.1.role", "user"),
-      strAttr("gen_ai.prompt.1.content", params.userTranscript),
+    );
+    // 文脈ありのときは user(文脈) を prompt.1、transcript を prompt.2 に置く
+    let idx = 1;
+    if (params.userContext?.trim()) {
+      attributes.push(
+        strAttr(`gen_ai.prompt.${idx}.role`, "user"),
+        strAttr(`gen_ai.prompt.${idx}.content`, params.userContext),
+      );
+      idx++;
+    }
+    attributes.push(
+      strAttr(`gen_ai.prompt.${idx}.role`, "user"),
+      strAttr(`gen_ai.prompt.${idx}.content`, params.userTranscript),
     );
     if (params.completion != null) {
       attributes.push(

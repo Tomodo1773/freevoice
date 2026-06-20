@@ -202,6 +202,72 @@ async fn paste_text(text: String, method: String) -> Result<(), String> {
     .map_err(|_| "スレッドパニック".to_string())?
 }
 
+/// フォアグラウンドウィンドウの識別情報を返す。
+/// `id` はウィンドウハンドル（hwnd）を数値化した文字列で、同一アプリの別ウィンドウも
+/// 一意に区別できる安定キー。`exe`/`title` は人間可読・ログ用。
+/// 取得できない場合は各フィールドを空文字で返す（呼び出し側で「スコープなし」と扱う）。
+#[tauri::command]
+fn get_foreground_window() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, HWND};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        };
+
+        unsafe {
+            let hwnd: HWND = GetForegroundWindow();
+            if hwnd.is_null() {
+                return Ok(serde_json::json!({ "id": "", "exe": "", "title": "" }));
+            }
+
+            // id: hwnd ポインタを数値文字列化（ウィンドウ識別キー）
+            let id = (hwnd as isize).to_string();
+
+            // タイトル取得
+            let mut title_buf = [0u16; 512];
+            let len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);
+            let title = if len > 0 {
+                String::from_utf16_lossy(&title_buf[..len as usize])
+            } else {
+                String::new()
+            };
+
+            // exe 名（basename）取得
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            let exe = if pid != 0 {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if handle.is_null() {
+                    String::new()
+                } else {
+                    let mut path_buf = [0u16; 1024];
+                    let mut size = path_buf.len() as u32;
+                    let ok = QueryFullProcessImageNameW(handle, 0, path_buf.as_mut_ptr(), &mut size);
+                    CloseHandle(handle);
+                    if ok != 0 && size > 0 {
+                        let full = String::from_utf16_lossy(&path_buf[..size as usize]);
+                        full.rsplit(['\\', '/']).next().unwrap_or(&full).to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+            } else {
+                String::new()
+            };
+
+            Ok(serde_json::json!({ "id": id, "exe": exe, "title": title }))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(serde_json::json!({ "id": "", "exe": "", "title": "" }))
+    }
+}
+
 #[tauri::command]
 fn set_click_through(window: WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -580,6 +646,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             paste_text,
+            get_foreground_window,
             set_click_through,
             position_overlay,
             update_shortcut,

@@ -547,6 +547,23 @@ export default function App() {
                 </Select.Root>
               </Box>
 
+              <Box>
+                <Text as="label" className="field-label">
+                  文脈を活用した整形
+                </Text>
+                <Flex align="center" gap="2">
+                  <Switch
+                    checked={form.contextAwareFormatting}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) => ({ ...prev, contextAwareFormatting: checked }))
+                    }
+                  />
+                  <Text size="2" color="gray">
+                    直近の話題をウィンドウごとに記憶し、整形時の誤変換補正に活用する
+                  </Text>
+                </Flex>
+              </Box>
+
               <Heading size="3" mt="4">LangSmith トレース</Heading>
 
               <Box>
