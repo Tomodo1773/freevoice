@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
+import { getContext, refreshContext } from "./windowContext";
 import { sendFormatSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
@@ -31,10 +32,18 @@ function toUserMessage(err: unknown): string {
   return "エラーが発生しました";
 }
 
+interface LogData {
+  transcription: string;
+  formatted: string;
+  topic?: string;
+  window?: { exe: string; title: string };
+  error?: string;
+}
+
 async function saveLogEntry(
   logFolder: string,
   now: Date,
-  data: { transcription: string; formatted: string; error?: string }
+  data: LogData
 ): Promise<void> {
   const isoTimestamp = now.toISOString();
   const datePart = isoTimestamp.slice(0, 10); // YYYY-MM-DD
@@ -48,7 +57,7 @@ async function saveLogEntry(
 async function trySaveLog(
   configuredFolder: string,
   now: Date,
-  data: { transcription: string; formatted: string; error?: string }
+  data: LogData
 ): Promise<void> {
   try {
     const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
@@ -70,6 +79,7 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const recordingWindowPromiseRef = useRef<Promise<{ id: string; exe: string; title: string } | null> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedFormatApiKeyRef = useRef("");
   const cachedLangsmithApiKeyRef = useRef("");
@@ -203,6 +213,7 @@ export default function Overlay() {
 
     logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
+    recordingWindowPromiseRef.current = null;
 
     const now = new Date();
     // 録音開始音
@@ -230,6 +241,18 @@ export default function Overlay() {
       cachedLangsmithApiKeyRef.current = langsmithApiKey;
       // 整形APIへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）
       warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
+
+      // 文脈スコープ用にフォアグラウンドウィンドウを取得。await せず録音中に解決させ、
+      // overlay show + getUserMedia の並列化（クリティカルパス）を阻害しない。
+      if (settings.contextAwareFormatting) {
+        recordingWindowPromiseRef.current = invoke<{ id: string; exe: string; title: string }>("get_foreground_window")
+          .then((fw) => (fw.id ? { id: fw.id, exe: fw.exe, title: fw.title } : null))
+          .catch((e) => {
+            logWarn("overlay.handleStart", "get_foreground_window failed", { error: e });
+            return null;
+          });
+      }
+
       setAudioLevel(0);
       setSilentWarn(false);
       silentSinceRef.current = null;
@@ -321,6 +344,11 @@ export default function Overlay() {
 
     const settings = cachedSettingsRef.current;
 
+    // 録音開始時に起動したウィンドウ取得を解決（録音中に完了済みのはず）し、話題コンテキストを引く
+    const winPromise = recordingWindowPromiseRef.current;
+    const win = settings.contextAwareFormatting && winPromise ? await winPromise : null;
+    const injectedContext = win ? getContext(win.id) : null;
+
     const now = new Date();
     let rawTranscript = "";
     let formattedText = "";
@@ -359,6 +387,7 @@ export default function Overlay() {
         formatModel,
         settings.postprocessPrompt,
         settings.reasoningEffort,
+        injectedContext ?? undefined,
         controller.signal
       );
       const formatEndMs = Date.now();
@@ -373,6 +402,7 @@ export default function Overlay() {
           requestModel: formatModel,
           responseModel: formatResponseModel,
           systemPrompt: settings.postprocessPrompt?.trim() || "",
+          userContext: injectedContext ?? undefined,
           userTranscript: raw,
           completion: fallback ? undefined : formatted,
           reasoningEffort: settings.reasoningEffort,
@@ -388,6 +418,18 @@ export default function Overlay() {
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
       dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });
+
+      // paste 後に非同期で話題コンテキストを更新（レイテンシに影響させない）。
+      // fallback（整形失敗で生テキスト）時は誤りを取り込まないよう蒸留しない。
+      if (win && !fallback) {
+        void refreshContext(win.id, win.exe, win.title, formatted, {
+          formatProvider: settings.formatProvider,
+          endpoint: settings.formatEndpoint,
+          apiKey: cachedFormatApiKeyRef.current,
+          model: formatModel,
+          reasoningEffort: settings.reasoningEffort,
+        });
+      }
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -409,6 +451,8 @@ export default function Overlay() {
         await trySaveLog(configuredFolder, now, {
           transcription: rawTranscript,
           formatted: formattedText,
+          ...(win ? { window: { exe: win.exe, title: win.title } } : {}),
+          ...(injectedContext ? { topic: injectedContext } : {}),
           ...(hasError ? { error: formatError(stopError) } : {}),
         });
       }

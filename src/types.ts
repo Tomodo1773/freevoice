@@ -28,6 +28,7 @@ export interface AppSettings {
   langsmithProject: string;
   langsmithRegion: LangsmithRegion;
   langsmithIncludeContent: boolean;
+  contextAwareFormatting: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -68,4 +69,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   langsmithProject: "freevoice",
   langsmithRegion: "us",
   langsmithIncludeContent: true,
+  contextAwareFormatting: true,
 };

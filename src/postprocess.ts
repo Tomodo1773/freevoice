@@ -87,38 +87,32 @@ export interface PostprocessResult {
   model?: string;
 }
 
-export async function postprocess(
-  transcript: string,
-  formatProvider: FormatProvider,
-  endpoint: string,
-  apiKey: string,
-  model: string,
-  prompt: string,
-  reasoningEffort: ReasoningEffort,
+/** 文脈（話題サマリ）を user メッセージに整形する。整形 messages と蒸留呼び出しで共用。 */
+export function buildContextMessage(context: string): { role: "user"; content: string } {
+  return {
+    role: "user",
+    content: `今は次のトピックについて話しています。文字起こしの誤変換補正の参考にしてください。\n${context}`,
+  };
+}
+
+export interface ChatCompletionResult {
+  content: string;
+  usage?: PostprocessUsage;
+  model?: string;
+}
+
+/** Chat Completions エンドポイントへ1回 POST し、本文と usage/model を取り出す。
+ *  整形（postprocess）と話題蒸留（windowContext）で共用。失敗は PostprocessError を投げる。 */
+export async function requestChatCompletion(
+  url: string,
+  headers: Record<string, string>,
+  body: object,
   signal?: AbortSignal
-): Promise<PostprocessResult> {
-  if (!transcript.trim()) return { text: transcript };
-  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
-
-  const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
-
+): Promise<ChatCompletionResult> {
   const res = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: transcript,
-        },
-      ],
-      reasoning_effort: reasoningEffort,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -132,16 +126,47 @@ export async function postprocess(
   if (typeof content !== "string" || !content.trim()) {
     throw new PostprocessError("後処理API 空の応答", res.status, "", true);
   }
-  const text: string = content;
   const promptTokens = data.usage?.prompt_tokens;
   const completionTokens = data.usage?.completion_tokens;
   const usage: PostprocessUsage | undefined =
     typeof promptTokens === "number" && typeof completionTokens === "number"
       ? { input_tokens: promptTokens, output_tokens: completionTokens }
       : undefined;
-  const responseModel: string | undefined =
+  const model: string | undefined =
     typeof data.model === "string" ? data.model : undefined;
-  return { text, usage, model: responseModel };
+  return { content, usage, model };
+}
+
+export async function postprocess(
+  transcript: string,
+  formatProvider: FormatProvider,
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  reasoningEffort: ReasoningEffort,
+  context?: string,
+  signal?: AbortSignal
+): Promise<PostprocessResult> {
+  if (!transcript.trim()) return { text: transcript };
+  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
+
+  const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
+
+  // system は固定の「プログラム」として保ち、文脈は user メッセージとして渡す（評価のしやすさ優先）
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...(context?.trim() ? [buildContextMessage(context)] : []),
+    { role: "user", content: transcript },
+  ];
+
+  const { content, usage, model: responseModel } = await requestChatCompletion(
+    url,
+    headers,
+    { model, messages, reasoning_effort: reasoningEffort },
+    signal
+  );
+  return { text: content, usage, model: responseModel };
 }
 
 const RETRY_DELAYS = [1000, 3000];
@@ -160,11 +185,12 @@ export async function postprocessWithRetry(
   model: string,
   prompt: string,
   reasoningEffort: ReasoningEffort,
+  context?: string,
   signal?: AbortSignal
 ): Promise<PostprocessWithRetryResult> {
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, signal);
+      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, context, signal);
       return { ...result, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
