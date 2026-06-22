@@ -87,11 +87,20 @@ export interface PostprocessResult {
   model?: string;
 }
 
-/** 文脈（話題サマリ）を user メッセージに整形する。整形 messages と蒸留呼び出しで共用。 */
-export function buildContextMessage(context: string): { role: "user"; content: string } {
+/** 文脈（話題サマリ）と校正対象を1つの user メッセージにまとめる。
+ *  参照情報と校正対象をデリミタで明示し、参照側は出力対象でないと指示する。
+ *  user ターンを1つに保つことで「連続 user ＝全部が入力」と誤解され、
+ *  文脈まで一緒に整形・出力されるのを防ぐ。 */
+export function buildContextualUserMessage(
+  context: string,
+  transcript: string,
+): { role: "user"; content: string } {
   return {
     role: "user",
-    content: `今は次のトピックについて話しています。文字起こしの誤変換補正の参考にしてください。\n${context}`,
+    content:
+      `<参考トピック>\n${context}\n</参考トピック>\n\n` +
+      `上記は誤変換補正のヒントであり、出力対象ではない。次の <校正対象> のテキストのみを校正して出力する。\n\n` +
+      `<校正対象>\n${transcript}\n</校正対象>`,
   };
 }
 
@@ -153,11 +162,13 @@ export async function postprocess(
 
   const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
 
-  // system は固定の「プログラム」として保ち、文脈は user メッセージとして渡す（評価のしやすさ優先）
+  // system は固定の「プログラム」として保つ。文脈がある場合も user ターンは1つにまとめ、
+  // 参照トピックと校正対象をデリミタで分離する（文脈ごと整形・出力される事故を防ぐ）。
   const messages = [
     { role: "system", content: systemPrompt },
-    ...(context?.trim() ? [buildContextMessage(context)] : []),
-    { role: "user", content: transcript },
+    context?.trim()
+      ? buildContextualUserMessage(context, transcript)
+      : { role: "user", content: transcript },
   ];
 
   const { content, usage, model: responseModel } = await requestChatCompletion(
