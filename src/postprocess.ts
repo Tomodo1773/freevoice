@@ -1,66 +1,7 @@
+import OpenAI from "openai";
+import { createChatClient, resolveBaseURL } from "./openaiClient";
 import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
 import { logWarn } from "./diagLog";
-
-export class PostprocessError extends Error {
-  public readonly retryable: boolean;
-
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly responseBody: string,
-    retryable?: boolean,
-  ) {
-    super(message);
-    this.name = "PostprocessError";
-    this.retryable = retryable ?? [429, 500, 502, 503].includes(status);
-  }
-}
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal!.reason);
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-export function buildFormatUrl(
-  formatProvider: FormatProvider,
-  endpoint: string,
-): string {
-  const base = formatProvider === "openai"
-    ? "https://api.openai.com/v1"
-    : endpoint.replace(/\/+$/, "");
-  return formatProvider === "azure"
-    ? `${base}/openai/v1/chat/completions`
-    : `${base}/chat/completions`;
-}
-
-export function buildFormatRequest(
-  formatProvider: FormatProvider,
-  endpoint: string,
-  apiKey: string,
-): { url: string; headers: Record<string, string> } {
-  return {
-    url: buildFormatUrl(formatProvider, endpoint),
-    headers: {
-      "Content-Type": "application/json",
-      ...(formatProvider === "openai"
-        ? { Authorization: `Bearer ${apiKey}` }
-        : { "api-key": apiKey }),
-    },
-  };
-}
 
 /** 整形エンドポイントへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）。
  *  接続確立だけが目的なので本文・認証は不要。失敗は無視する。 */
@@ -69,7 +10,7 @@ export function warmupFormatConnection(
   endpoint: string,
 ): void {
   try {
-    const origin = new URL(buildFormatUrl(formatProvider, endpoint)).origin;
+    const origin = new URL(resolveBaseURL(formatProvider, endpoint)).origin;
     void fetch(origin, { method: "HEAD", mode: "no-cors" }).catch(() => {});
   } catch {
     // endpoint未設定など。ウォームアップ失敗は本処理に影響させない
@@ -85,6 +26,7 @@ export interface PostprocessResult {
   text: string;
   usage?: PostprocessUsage;
   model?: string;
+  messages: Array<{ role: string; content: string }>;
 }
 
 /** 文脈（話題サマリ）と校正対象を1つの user メッセージにまとめる。
@@ -104,46 +46,18 @@ export function buildContextualUserMessage(
   };
 }
 
-export interface ChatCompletionResult {
-  content: string;
-  usage?: PostprocessUsage;
-  model?: string;
-}
-
-/** Chat Completions エンドポイントへ1回 POST し、本文と usage/model を取り出す。
- *  整形（postprocess）と話題蒸留（windowContext）で共用。失敗は PostprocessError を投げる。 */
-export async function requestChatCompletion(
-  url: string,
-  headers: Record<string, string>,
-  body: object,
-  signal?: AbortSignal
-): Promise<ChatCompletionResult> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new PostprocessError(`後処理API エラー: ${res.status} ${text}`, res.status, text);
-  }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new PostprocessError("後処理API 空の応答", res.status, "", true);
-  }
-  const promptTokens = data.usage?.prompt_tokens;
-  const completionTokens = data.usage?.completion_tokens;
-  const usage: PostprocessUsage | undefined =
-    typeof promptTokens === "number" && typeof completionTokens === "number"
-      ? { input_tokens: promptTokens, output_tokens: completionTokens }
-      : undefined;
-  const model: string | undefined =
-    typeof data.model === "string" ? data.model : undefined;
-  return { content, usage, model };
+export function buildPostprocessMessages(
+  transcript: string,
+  prompt: string,
+  context?: string,
+): Array<{ role: "system" | "user"; content: string }> {
+  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
+  return [
+    { role: "system", content: systemPrompt },
+    context?.trim()
+      ? buildContextualUserMessage(context, transcript)
+      : { role: "user", content: transcript },
+  ];
 }
 
 export async function postprocess(
@@ -155,32 +69,51 @@ export async function postprocess(
   prompt: string,
   reasoningEffort: ReasoningEffort,
   context?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<PostprocessResult> {
-  if (!transcript.trim()) return { text: transcript };
-  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
+  if (!transcript.trim()) return { text: transcript, messages: [] };
 
-  const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
-
-  // system は固定の「プログラム」として保つ。文脈がある場合も user ターンは1つにまとめ、
-  // 参照トピックと校正対象をデリミタで分離する（文脈ごと整形・出力される事故を防ぐ）。
-  const messages = [
-    { role: "system", content: systemPrompt },
-    context?.trim()
-      ? buildContextualUserMessage(context, transcript)
-      : { role: "user", content: transcript },
-  ];
-
-  const { content, usage, model: responseModel } = await requestChatCompletion(
-    url,
-    headers,
-    { model, messages, reasoning_effort: reasoningEffort },
-    signal
+  const messages = buildPostprocessMessages(transcript, prompt, context);
+  const client = createChatClient(formatProvider, endpoint, apiKey);
+  const completion = await client.chat.completions.create(
+    {
+      model,
+      messages: messages as OpenAI.ChatCompletionMessageParam[],
+      reasoning_effort: reasoningEffort,
+    },
+    { signal },
   );
-  return { text: content, usage, model: responseModel };
+
+  const text = completion.choices[0]?.message?.content ?? "";
+  const promptTokens = completion.usage?.prompt_tokens;
+  const completionTokens = completion.usage?.completion_tokens;
+  const usage: PostprocessUsage | undefined =
+    promptTokens != null && completionTokens != null
+      ? { input_tokens: promptTokens, output_tokens: completionTokens }
+      : undefined;
+
+  return { text, usage, model: completion.model, messages };
 }
 
-const RETRY_DELAYS = [1000, 3000];
+const EMPTY_RETRY_DELAYS = [1000, 3000];
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export interface PostprocessWithRetryResult extends PostprocessResult {
   fallback: boolean;
@@ -197,35 +130,49 @@ export async function postprocessWithRetry(
   prompt: string,
   reasoningEffort: ReasoningEffort,
   context?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<PostprocessWithRetryResult> {
-  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-    try {
-      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, context, signal);
-      return { ...result, fallback: false, fallbackReason: undefined };
-    } catch (e) {
-      if (!(e instanceof PostprocessError)) throw e;
-      if (!e.retryable || attempt >= RETRY_DELAYS.length) {
-        const reason = e.status < 400
-          ? "空の応答"
-          : e.status === 401 || e.status === 403
-          ? "認証エラー"
-          : e.status === 404
-          ? "エンドポイント不明"
-          : e.status === 429
-          ? "レート制限"
-          : `エラー ${e.status}`;
-        logWarn("postprocess", "format api fallback", { status: e.status, reason });
-        return { text: transcript, fallback: true, fallbackReason: reason, errorStatus: e.status };
-      }
-      logWarn("postprocess", "format api retry", {
-        attempt: attempt + 1,
-        max: RETRY_DELAYS.length,
-        status: e.status,
-      });
-      await delay(RETRY_DELAYS[attempt], signal);
+  if (!transcript.trim()) return { text: transcript, fallback: false, messages: [] };
+
+  const messages = buildPostprocessMessages(transcript, prompt, context);
+
+  try {
+    let result = await postprocess(
+      transcript, formatProvider, endpoint, apiKey,
+      model, prompt, reasoningEffort, context, signal,
+    );
+
+    for (const ms of EMPTY_RETRY_DELAYS) {
+      if (result.text.trim()) break;
+      logWarn("postprocess", "format api empty response retry", { delay: ms });
+      await delay(ms, signal);
+      result = await postprocess(
+        transcript, formatProvider, endpoint, apiKey,
+        model, prompt, reasoningEffort, context, signal,
+      );
     }
+
+    if (!result.text.trim()) {
+      logWarn("postprocess", "format api fallback", { reason: "空の応答" });
+      return { ...result, text: transcript, fallback: true, fallbackReason: "空の応答" };
+    }
+    return { ...result, fallback: false };
+  } catch (e) {
+    // AbortError は DOMException として再スローし、Overlay のキャンセル処理に委ねる
+    if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+    if (e instanceof OpenAI.APIError) {
+      const status = e.status ?? 0;
+      const reason =
+        status === 401 || status === 403
+          ? "認証エラー"
+          : status === 404
+            ? "エンドポイント不明"
+            : status === 429
+              ? "レート制限"
+              : `エラー ${status}`;
+      logWarn("postprocess", "format api fallback", { status, reason });
+      return { text: transcript, fallback: true, fallbackReason: reason, errorStatus: status, messages };
+    }
+    throw e;
   }
-  /* istanbul ignore next -- unreachable: loop always returns */
-  return { text: transcript, fallback: true, fallbackReason: undefined };
 }

@@ -13,8 +13,10 @@ function findStr(payload: Payload, key: string): string | undefined {
 const base: FormatSpanParams = {
   provider: "openai",
   requestModel: "gpt-4o",
-  systemPrompt: "SYS",
-  userTranscript: "TR",
+  messages: [
+    { role: "system", content: "SYS" },
+    { role: "user", content: "TR" },
+  ],
   reasoningEffort: "low",
   startTimeMs: 0,
   endTimeMs: 1,
@@ -22,7 +24,7 @@ const base: FormatSpanParams = {
 };
 
 describe("buildFormatSpanPayload prompt index", () => {
-  it("文脈なし: prompt.1 が transcript、prompt.2 は無し", () => {
+  it("文脈なし: messages 配列がそのまま prompt 属性になる", () => {
     const p = buildFormatSpanPayload(base, "proj");
     expect(findStr(p, "gen_ai.prompt.0.content")).toBe("SYS");
     expect(findStr(p, "gen_ai.prompt.1.role")).toBe("user");
@@ -30,16 +32,24 @@ describe("buildFormatSpanPayload prompt index", () => {
     expect(findStr(p, "gen_ai.prompt.2.content")).toBeUndefined();
   });
 
-  it("文脈あり: prompt.1=文脈, prompt.2=transcript", () => {
-    const p = buildFormatSpanPayload({ ...base, userContext: "CTX" }, "proj");
+  it("文脈あり: messages に XMLタグ統合済みの user メッセージが含まれる", () => {
+    const contextMessages = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "<参考トピック>\nCTX\n</参考トピック>\n\n上記は誤変換補正のヒントであり、出力対象ではない。次の <校正対象> のテキストのみを校正して出力する。\n\n<校正対象>\nTR\n</校正対象>" },
+    ];
+    const p = buildFormatSpanPayload({ ...base, messages: contextMessages }, "proj");
     expect(findStr(p, "gen_ai.prompt.0.content")).toBe("SYS");
-    expect(findStr(p, "gen_ai.prompt.1.content")).toBe("CTX");
-    expect(findStr(p, "gen_ai.prompt.2.role")).toBe("user");
-    expect(findStr(p, "gen_ai.prompt.2.content")).toBe("TR");
+    expect(findStr(p, "gen_ai.prompt.1.role")).toBe("user");
+    const content = findStr(p, "gen_ai.prompt.1.content")!;
+    expect(content).toContain("<参考トピック>");
+    expect(content).toContain("CTX");
+    expect(content).toContain("<校正対象>");
+    expect(content).toContain("TR");
+    expect(findStr(p, "gen_ai.prompt.2.content")).toBeUndefined();
   });
 
   it("includeContent=false ではプロンプト内容を含めない", () => {
-    const p = buildFormatSpanPayload({ ...base, includeContent: false, userContext: "CTX" }, "proj");
+    const p = buildFormatSpanPayload({ ...base, includeContent: false }, "proj");
     expect(findStr(p, "gen_ai.prompt.0.content")).toBeUndefined();
     expect(findStr(p, "gen_ai.prompt.1.content")).toBeUndefined();
   });

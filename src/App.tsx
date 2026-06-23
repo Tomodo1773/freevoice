@@ -20,7 +20,7 @@ import {
 import History from "./History";
 import { useSettings } from "./useSettings";
 import { AppSettings, FormatProvider, InputMethod, LangsmithRegion, ReasoningEffort, TranscriptionProvider } from "./types";
-import { buildFormatRequest } from "./postprocess";
+import { createChatClient } from "./openaiClient";
 import { logWarn, logError } from "./diagLog";
 
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
@@ -127,28 +127,26 @@ export default function App() {
     setTestStatus("testing");
     setTestMessage("");
     try {
-      const { url, headers } = buildFormatRequest(form.formatProvider, form.formatEndpoint, currentFormatApiKey);
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const client = createChatClient(form.formatProvider, form.formatEndpoint, currentFormatApiKey);
+      await client.chat.completions.create(
+        {
           model: currentFormatModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
           reasoning_effort: "none",
-        }),
-      });
-      if (res.ok || res.status === 400) {
+        },
+        { maxRetries: 0 },
+      );
+      setTestStatus("ok");
+      setTestMessage("接続成功");
+    } catch (e: any) {
+      if (e?.status === 400) {
         setTestStatus("ok");
         setTestMessage("接続成功");
       } else {
-        const text = await res.text().catch(() => res.statusText);
         setTestStatus("error");
-        setTestMessage(`エラー: ${res.status} ${text.slice(0, 120)}`);
+        setTestMessage(`接続失敗: ${e?.message ?? String(e)}`.slice(0, 150));
       }
-    } catch (e) {
-      setTestStatus("error");
-      setTestMessage(`接続失敗: ${String(e)}`);
     }
   };
 

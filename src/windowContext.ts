@@ -1,4 +1,4 @@
-import { buildFormatRequest, requestChatCompletion } from "./postprocess";
+import { createChatClient } from "./openaiClient";
 import { FormatProvider, ReasoningEffort } from "./types";
 import { logInfo, logWarn } from "./diagLog";
 
@@ -87,13 +87,11 @@ export async function distillTopic(
   formatted: string,
   config: DistillConfig,
 ): Promise<string> {
-  const { url, headers } = buildFormatRequest(config.formatProvider, config.endpoint, config.apiKey);
+  const client = createChatClient(config.formatProvider, config.endpoint, config.apiKey);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DISTILL_TIMEOUT_MS);
   try {
-    const { content } = await requestChatCompletion(
-      url,
-      headers,
+    const completion = await client.chat.completions.create(
       {
         model: config.model,
         messages: [
@@ -105,8 +103,10 @@ export async function distillTopic(
         ],
         reasoning_effort: config.reasoningEffort,
       },
-      controller.signal
+      { signal: controller.signal },
     );
+    const content = completion.choices[0]?.message?.content;
+    if (!content?.trim()) throw new Error("空の応答");
     return content.trim();
   } finally {
     clearTimeout(timer);

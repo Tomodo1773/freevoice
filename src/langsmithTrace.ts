@@ -44,10 +44,8 @@ export interface FormatSpanParams {
   provider: FormatProvider;
   requestModel: string;
   responseModel?: string;
-  systemPrompt: string;
-  /** 整形に注入した話題コンテキスト（user メッセージ）。無ければ省略。 */
-  userContext?: string;
-  userTranscript: string;
+  /** LLM に実際に送信した messages 配列。tracing の single source of truth。 */
+  messages: Array<{ role: string; content: string }>;
   completion?: string;
   reasoningEffort: ReasoningEffort;
   usage?: { input_tokens?: number; output_tokens?: number };
@@ -89,23 +87,13 @@ export function buildFormatSpanPayload(
   }
 
   if (params.includeContent) {
-    attributes.push(
-      strAttr("gen_ai.prompt.0.role", "system"),
-      strAttr("gen_ai.prompt.0.content", params.systemPrompt),
-    );
-    // 文脈ありのときは user(文脈) を prompt.1、transcript を prompt.2 に置く
-    let idx = 1;
-    if (params.userContext?.trim()) {
+    for (let i = 0; i < params.messages.length; i++) {
+      const msg = params.messages[i];
       attributes.push(
-        strAttr(`gen_ai.prompt.${idx}.role`, "user"),
-        strAttr(`gen_ai.prompt.${idx}.content`, params.userContext),
+        strAttr(`gen_ai.prompt.${i}.role`, msg.role),
+        strAttr(`gen_ai.prompt.${i}.content`, msg.content),
       );
-      idx++;
     }
-    attributes.push(
-      strAttr(`gen_ai.prompt.${idx}.role`, "user"),
-      strAttr(`gen_ai.prompt.${idx}.content`, params.userTranscript),
-    );
     if (params.completion != null) {
       attributes.push(
         strAttr("gen_ai.completion.0.role", "assistant"),
