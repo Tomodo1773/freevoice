@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
 import { getContext, refreshContext } from "./windowContext";
-import { sendFormatSpan } from "./langsmithTrace";
+import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
@@ -395,7 +395,8 @@ export default function Overlay() {
       formattedText = formatted;
 
       if (settings.langsmithEnabled) {
-        void sendFormatSpan({
+        void sendLlmSpan({
+          spanName: "format",
           region: settings.langsmithRegion,
           project: settings.langsmithProject,
           apiKey: cachedLangsmithApiKeyRef.current,
@@ -427,7 +428,12 @@ export default function Overlay() {
           apiKey: cachedFormatApiKeyRef.current,
           model: formatModel,
           reasoningEffort: settings.reasoningEffort,
-        });
+        }, settings.langsmithEnabled ? {
+          region: settings.langsmithRegion,
+          project: settings.langsmithProject,
+          apiKey: cachedLangsmithApiKeyRef.current,
+          includeContent: settings.langsmithIncludeContent,
+        } : undefined);
       }
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
