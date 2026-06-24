@@ -162,11 +162,7 @@ export function buildLlmSpanPayload(
   };
 }
 
-export interface SendLlmSpanArgs extends LlmSpanParams {
-  region: LangsmithRegion;
-  project: string;
-  apiKey: string;
-}
+export type SendLlmSpanArgs = LlmSpanParams & LangsmithConfig;
 
 /**
  * LangSmith に LLM 呼び出しのトレースを送信する。

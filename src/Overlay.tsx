@@ -394,12 +394,17 @@ export default function Overlay() {
       const formatEndMs = Date.now();
       formattedText = formatted;
 
-      if (settings.langsmithEnabled) {
+      const langsmithConfig = settings.langsmithEnabled ? {
+        region: settings.langsmithRegion,
+        project: settings.langsmithProject,
+        apiKey: cachedLangsmithApiKeyRef.current,
+        includeContent: settings.langsmithIncludeContent,
+      } as const : undefined;
+
+      if (langsmithConfig) {
         void sendLlmSpan({
           spanName: "format",
-          region: settings.langsmithRegion,
-          project: settings.langsmithProject,
-          apiKey: cachedLangsmithApiKeyRef.current,
+          ...langsmithConfig,
           provider: settings.formatProvider,
           requestModel: formatModel,
           responseModel: formatResponseModel,
@@ -409,7 +414,6 @@ export default function Overlay() {
           usage: formatUsage,
           startTimeMs: formatStartMs,
           endTimeMs: formatEndMs,
-          includeContent: settings.langsmithIncludeContent,
           error: fallback
             ? { message: fallbackReason ?? "format fallback", status: formatErrorStatus }
             : undefined,
@@ -428,12 +432,7 @@ export default function Overlay() {
           apiKey: cachedFormatApiKeyRef.current,
           model: formatModel,
           reasoningEffort: settings.reasoningEffort,
-        }, settings.langsmithEnabled ? {
-          region: settings.langsmithRegion,
-          project: settings.langsmithProject,
-          apiKey: cachedLangsmithApiKeyRef.current,
-          includeContent: settings.langsmithIncludeContent,
-        } : undefined);
+        }, langsmithConfig);
       }
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
