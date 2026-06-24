@@ -81,10 +81,16 @@ export interface PostprocessUsage {
   output_tokens: number;
 }
 
+export interface ChatMessage {
+  role: string;
+  content: string;
+}
+
 export interface PostprocessResult {
   text: string;
   usage?: PostprocessUsage;
   model?: string;
+  messages?: ChatMessage[];
 }
 
 /** 文脈（話題サマリ）と校正対象を1つの user メッセージにまとめる。
@@ -146,30 +152,33 @@ export async function requestChatCompletion(
   return { content, usage, model };
 }
 
+export function buildPostprocessMessages(
+  prompt: string,
+  transcript: string,
+  context?: string,
+): ChatMessage[] {
+  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
+  return [
+    { role: "system", content: systemPrompt },
+    context?.trim()
+      ? buildContextualUserMessage(context, transcript)
+      : { role: "user", content: transcript },
+  ];
+}
+
 export async function postprocess(
   transcript: string,
   formatProvider: FormatProvider,
   endpoint: string,
   apiKey: string,
   model: string,
-  prompt: string,
   reasoningEffort: ReasoningEffort,
-  context?: string,
+  messages: ChatMessage[],
   signal?: AbortSignal
 ): Promise<PostprocessResult> {
   if (!transcript.trim()) return { text: transcript };
-  const systemPrompt = prompt?.trim() ? prompt : DEFAULT_SETTINGS.postprocessPrompt;
 
   const { url, headers } = buildFormatRequest(formatProvider, endpoint, apiKey);
-
-  // system は固定の「プログラム」として保つ。文脈がある場合も user ターンは1つにまとめ、
-  // 参照トピックと校正対象をデリミタで分離する（文脈ごと整形・出力される事故を防ぐ）。
-  const messages = [
-    { role: "system", content: systemPrompt },
-    context?.trim()
-      ? buildContextualUserMessage(context, transcript)
-      : { role: "user", content: transcript },
-  ];
 
   const { content, usage, model: responseModel } = await requestChatCompletion(
     url,
@@ -177,12 +186,13 @@ export async function postprocess(
     { model, messages, reasoning_effort: reasoningEffort },
     signal
   );
-  return { text: content, usage, model: responseModel };
+  return { text: content, usage, model: responseModel, messages };
 }
 
 const RETRY_DELAYS = [1000, 3000];
 
 export interface PostprocessWithRetryResult extends PostprocessResult {
+  messages: ChatMessage[];
   fallback: boolean;
   fallbackReason?: string;
   errorStatus?: number;
@@ -199,10 +209,11 @@ export async function postprocessWithRetry(
   context?: string,
   signal?: AbortSignal
 ): Promise<PostprocessWithRetryResult> {
+  const messages = buildPostprocessMessages(prompt, transcript, context);
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
-      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, prompt, reasoningEffort, context, signal);
-      return { ...result, fallback: false, fallbackReason: undefined };
+      const result = await postprocess(transcript, formatProvider, endpoint, apiKey, model, reasoningEffort, messages, signal);
+      return { ...result, messages, fallback: false, fallbackReason: undefined };
     } catch (e) {
       if (!(e instanceof PostprocessError)) throw e;
       if (!e.retryable || attempt >= RETRY_DELAYS.length) {
@@ -216,7 +227,13 @@ export async function postprocessWithRetry(
           ? "レート制限"
           : `エラー ${e.status}`;
         logWarn("postprocess", "format api fallback", { status: e.status, reason });
-        return { text: transcript, fallback: true, fallbackReason: reason, errorStatus: e.status };
+        return {
+          text: transcript,
+          fallback: true,
+          fallbackReason: reason,
+          errorStatus: e.status,
+          messages,
+        };
       }
       logWarn("postprocess", "format api retry", {
         attempt: attempt + 1,
@@ -227,5 +244,5 @@ export async function postprocessWithRetry(
     }
   }
   /* istanbul ignore next -- unreachable: loop always returns */
-  return { text: transcript, fallback: true, fallbackReason: undefined };
+  return { text: transcript, fallback: true, fallbackReason: undefined, messages };
 }
