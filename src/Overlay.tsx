@@ -379,6 +379,7 @@ export default function Overlay() {
         usage: formatUsage,
         model: formatResponseModel,
         errorStatus: formatErrorStatus,
+        messages: formatMessages,
       } = await postprocessWithRetry(
         raw,
         settings.formatProvider,
@@ -401,9 +402,7 @@ export default function Overlay() {
           provider: settings.formatProvider,
           requestModel: formatModel,
           responseModel: formatResponseModel,
-          systemPrompt: settings.postprocessPrompt?.trim() || "",
-          userContext: injectedContext ?? undefined,
-          userTranscript: raw,
+          messages: formatMessages,
           completion: fallback ? undefined : formatted,
           reasoningEffort: settings.reasoningEffort,
           usage: formatUsage,

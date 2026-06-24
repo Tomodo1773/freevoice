@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { postprocess, buildContextualUserMessage } from "./postprocess";
+import { postprocess, buildContextualUserMessage, buildPostprocessMessages } from "./postprocess";
 
 function mockFetch(content = "整形済み") {
   return vi.fn().mockResolvedValue({
@@ -8,50 +8,76 @@ function mockFetch(content = "整形済み") {
   });
 }
 
-describe("postprocess messages 構築", () => {
+describe("postprocess", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("文脈なしは system + user(transcript) の2件", async () => {
+  it("渡された messages をそのまま API に送信する", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
-    await postprocess("こんにちは", "openai", "", "key", "gpt-4o", "SYS", "low");
+    const messages = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "こんにちは" },
+    ];
+    await postprocess("こんにちは", "openai", "", "key", "gpt-4o", "low", messages);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.messages).toHaveLength(2);
-    expect(body.messages[0].role).toBe("system");
-    expect(body.messages[0].content).toBe("SYS");
-    expect(body.messages[1].role).toBe("user");
-    expect(body.messages[1].content).toBe("こんにちは");
+    expect(body.messages[0]).toEqual({ role: "system", content: "SYS" });
+    expect(body.messages[1]).toEqual({ role: "user", content: "こんにちは" });
   });
 
-  it("文脈ありは system + user(参照+校正対象) の2件にまとめる", async () => {
-    const fetchMock = mockFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    await postprocess("こんにちは", "openai", "", "key", "gpt-4o", "SYS", "low", "話題A");
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.messages).toHaveLength(2);
-    expect(body.messages[0].role).toBe("system");
-    expect(body.messages[1].role).toBe("user");
-    // 参照トピックと校正対象が1つの user メッセージにデリミタ分離されている
-    expect(body.messages[1].content).toContain("<参考トピック>");
-    expect(body.messages[1].content).toContain("話題A");
-    expect(body.messages[1].content).toContain("<校正対象>");
-    expect(body.messages[1].content).toContain("こんにちは");
+  it("成功時に同じ messages を戻り値に含む", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    const messages = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "こんにちは" },
+    ];
+    const result = await postprocess("こんにちは", "openai", "", "key", "gpt-4o", "low", messages);
+    expect(result.messages).toBe(messages);
   });
 
-  it("空文字の文脈は注入しない", async () => {
-    const fetchMock = mockFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    await postprocess("こんにちは", "openai", "", "key", "gpt-4o", "SYS", "low", "   ");
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.messages).toHaveLength(2);
+  it("空 transcript では messages を含まない", async () => {
+    const messages = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "  " },
+    ];
+    const result = await postprocess("  ", "openai", "", "key", "gpt-4o", "low", messages);
+    expect(result.messages).toBeUndefined();
   });
+});
 
-  it("buildContextualUserMessage は参照と校正対象をデリミタで分離する", () => {
+describe("buildContextualUserMessage", () => {
+  it("参照と校正対象をデリミタで分離する", () => {
     const m = buildContextualUserMessage("話題X", "本文Y");
     expect(m.role).toBe("user");
     expect(m.content).toContain("<参考トピック>\n話題X\n</参考トピック>");
     expect(m.content).toContain("<校正対象>\n本文Y\n</校正対象>");
-    // 校正対象が参照トピックより後ろにある（直近指示として効くように）
     expect(m.content.indexOf("<参考トピック>")).toBeLessThan(m.content.indexOf("<校正対象>"));
+  });
+});
+
+describe("buildPostprocessMessages", () => {
+  it("文脈なし: system + user(transcript)", () => {
+    const msgs = buildPostprocessMessages("SYS", "hello");
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({ role: "system", content: "SYS" });
+    expect(msgs[1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("文脈あり: system + user(context+transcript)", () => {
+    const msgs = buildPostprocessMessages("SYS", "hello", "CTX");
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({ role: "system", content: "SYS" });
+    expect(msgs[1].content).toContain("CTX");
+    expect(msgs[1].content).toContain("hello");
+  });
+
+  it("空文字の文脈は注入しない", () => {
+    const msgs = buildPostprocessMessages("SYS", "hello", "  ");
+    expect(msgs[1].content).toBe("hello");
+  });
+
+  it("空の prompt ではデフォルトプロンプトを使用", () => {
+    const msgs = buildPostprocessMessages("", "hello");
+    expect(msgs[0].content).not.toBe("");
   });
 });

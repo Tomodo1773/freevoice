@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logWarn } from "./diagLog";
+import { ChatMessage } from "./postprocess";
 import { FormatProvider, LangsmithRegion, ReasoningEffort } from "./types";
 
 const LANGSMITH_ENDPOINTS: Record<LangsmithRegion, string> = {
@@ -44,10 +45,7 @@ export interface FormatSpanParams {
   provider: FormatProvider;
   requestModel: string;
   responseModel?: string;
-  systemPrompt: string;
-  /** 整形に注入した話題コンテキスト（user メッセージ）。無ければ省略。 */
-  userContext?: string;
-  userTranscript: string;
+  messages: ChatMessage[];
   completion?: string;
   reasoningEffort: ReasoningEffort;
   usage?: { input_tokens?: number; output_tokens?: number };
@@ -89,23 +87,12 @@ export function buildFormatSpanPayload(
   }
 
   if (params.includeContent) {
-    attributes.push(
-      strAttr("gen_ai.prompt.0.role", "system"),
-      strAttr("gen_ai.prompt.0.content", params.systemPrompt),
-    );
-    // 文脈ありのときは user(文脈) を prompt.1、transcript を prompt.2 に置く
-    let idx = 1;
-    if (params.userContext?.trim()) {
+    params.messages.forEach((msg, idx) => {
       attributes.push(
-        strAttr(`gen_ai.prompt.${idx}.role`, "user"),
-        strAttr(`gen_ai.prompt.${idx}.content`, params.userContext),
+        strAttr(`gen_ai.prompt.${idx}.role`, msg.role),
+        strAttr(`gen_ai.prompt.${idx}.content`, msg.content),
       );
-      idx++;
-    }
-    attributes.push(
-      strAttr(`gen_ai.prompt.${idx}.role`, "user"),
-      strAttr(`gen_ai.prompt.${idx}.content`, params.userTranscript),
-    );
+    });
     if (params.completion != null) {
       attributes.push(
         strAttr("gen_ai.completion.0.role", "assistant"),
