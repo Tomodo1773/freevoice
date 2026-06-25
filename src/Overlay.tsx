@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
 import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
 import { getContext, refreshContext } from "./windowContext";
-import { sendFormatSpan } from "./langsmithTrace";
+import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { overlayReducer, initialState } from "./overlayReducer";
@@ -394,11 +394,17 @@ export default function Overlay() {
       const formatEndMs = Date.now();
       formattedText = formatted;
 
-      if (settings.langsmithEnabled) {
-        void sendFormatSpan({
-          region: settings.langsmithRegion,
-          project: settings.langsmithProject,
-          apiKey: cachedLangsmithApiKeyRef.current,
+      const langsmithConfig = settings.langsmithEnabled ? {
+        region: settings.langsmithRegion,
+        project: settings.langsmithProject,
+        apiKey: cachedLangsmithApiKeyRef.current,
+        includeContent: settings.langsmithIncludeContent,
+      } as const : undefined;
+
+      if (langsmithConfig) {
+        void sendLlmSpan({
+          spanName: "format",
+          ...langsmithConfig,
           provider: settings.formatProvider,
           requestModel: formatModel,
           responseModel: formatResponseModel,
@@ -408,7 +414,6 @@ export default function Overlay() {
           usage: formatUsage,
           startTimeMs: formatStartMs,
           endTimeMs: formatEndMs,
-          includeContent: settings.langsmithIncludeContent,
           error: fallback
             ? { message: fallbackReason ?? "format fallback", status: formatErrorStatus }
             : undefined,
@@ -427,7 +432,7 @@ export default function Overlay() {
           apiKey: cachedFormatApiKeyRef.current,
           model: formatModel,
           reasoningEffort: settings.reasoningEffort,
-        });
+        }, langsmithConfig);
       }
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）

@@ -1,4 +1,5 @@
-import { buildFormatRequest, requestChatCompletion } from "./postprocess";
+import { buildFormatRequest, ChatMessage, PostprocessError, PostprocessUsage, requestChatCompletion } from "./postprocess";
+import { LangsmithConfig, sendLlmSpan } from "./langsmithTrace";
 import { FormatProvider, ReasoningEffort } from "./types";
 import { logInfo, logWarn } from "./diagLog";
 
@@ -67,47 +68,60 @@ export interface DistillConfig {
   reasoningEffort: ReasoningEffort;
 }
 
-const DISTILL_SYSTEM_PROMPT = `あなたは音声入力アシスタントの文脈管理器です。
-これまでの「話題メモ」と新しい発話（整形済みテキスト）を受け取り、話題メモを更新してください。
-このメモは後続の文字起こし整形で、ドメインを手がかりに同音異義の誤変換を補正するために使われます。
+const DISTILL_SYSTEM_PROMPT = `あなたは音声入力の誤変換補正に使う「話題メモ」を管理する。
+旧メモと新しい発話から、メモを毎回ゼロから書き直す（追記ではない）。
 
-出力要件:
-- 扱っているドメイン・技術・話題を2〜3行で簡潔にまとめる
-- 固有名詞・専門用語は正しい表記のまま保持する
-- 個々の単語の羅列ではなく「何について話しているか」を抽象化する
-- 古くなって無関係になった話題は落とす
-- 前置きや説明を書かず、メモ本文のみを出力する`;
+目的: 後続の音声文字起こしで同音異義語・専門用語の誤変換を防ぐヒントを提供する。
+
+ルール:
+- 現在の話題を1〜2文でまとめる。3文以上は禁止
+- 話題が変わったら旧メモの内容は捨てる。履歴を残さない
+- 誤変換補正に役立つ固有名詞・専門用語は正確な表記で保持する
+- 経緯・詳細・結論は不要。「何の領域の話か」だけ書く
+- メモ本文のみ出力する`;
 
 /** 蒸留呼び出しのタイムアウト。接続スタール時に in-flight ガードが固着しないよう必ず中断する。 */
 const DISTILL_TIMEOUT_MS = 15000;
+
+export function buildDistillMessages(prev: string, formatted: string): ChatMessage[] {
+  return [
+    { role: "system", content: DISTILL_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `これまでの話題メモ:\n${prev || "（なし）"}\n\n新しい発話:\n${formatted}`,
+    },
+  ];
+}
+
+export interface DistillResult {
+  summary: string;
+  usage?: PostprocessUsage;
+  model?: string;
+  messages: ChatMessage[];
+}
 
 /** 旧サマリと新しい整形済みテキストから、更新された話題サマリを生成する。 */
 export async function distillTopic(
   prev: string,
   formatted: string,
   config: DistillConfig,
-): Promise<string> {
+): Promise<DistillResult> {
+  const messages = buildDistillMessages(prev, formatted);
   const { url, headers } = buildFormatRequest(config.formatProvider, config.endpoint, config.apiKey);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DISTILL_TIMEOUT_MS);
   try {
-    const { content } = await requestChatCompletion(
+    const { content, usage, model } = await requestChatCompletion(
       url,
       headers,
       {
         model: config.model,
-        messages: [
-          { role: "system", content: DISTILL_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `これまでの話題メモ:\n${prev || "（なし）"}\n\n新しい発話:\n${formatted}`,
-          },
-        ],
+        messages,
         reasoning_effort: config.reasoningEffort,
       },
       controller.signal
     );
-    return content.trim();
+    return { summary: content.trim(), usage, model, messages };
   } finally {
     clearTimeout(timer);
   }
@@ -121,15 +135,43 @@ export async function refreshContext(
   title: string,
   formatted: string,
   config: DistillConfig,
+  langsmith?: LangsmithConfig,
 ): Promise<void> {
   await withInFlightGuard(id, async () => {
+    const prev = store.get(id)?.summary ?? "";
+    const startTimeMs = Date.now();
+    let result: DistillResult | undefined;
+    let distillError: { message: string; status?: number } | undefined;
+
     try {
-      const prev = store.get(id)?.summary ?? "";
-      const summary = await distillTopic(prev, formatted, config);
-      updateContext(id, exe, title, summary);
-      logInfo("windowContext", "topic distilled", { id, exe, summary });
+      result = await distillTopic(prev, formatted, config);
+      updateContext(id, exe, title, result.summary);
+      logInfo("windowContext", "topic distilled", { id, exe, summary: result.summary });
     } catch (e) {
+      distillError = e instanceof PostprocessError
+        ? { message: e.message, status: e.status }
+        : { message: e instanceof Error ? e.message : String(e) };
       logWarn("windowContext", "distill failed", { error: e });
+    }
+
+    if (langsmith) {
+      void sendLlmSpan({
+        spanName: "distill",
+        region: langsmith.region,
+        project: langsmith.project,
+        apiKey: langsmith.apiKey,
+        provider: config.formatProvider,
+        requestModel: config.model,
+        responseModel: result?.model,
+        messages: result?.messages ?? buildDistillMessages(prev, formatted),
+        completion: result?.summary,
+        reasoningEffort: config.reasoningEffort,
+        usage: result?.usage,
+        startTimeMs,
+        endTimeMs: Date.now(),
+        includeContent: langsmith.includeContent,
+        error: distillError,
+      });
     }
   });
 }

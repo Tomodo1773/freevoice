@@ -94,9 +94,7 @@ export interface PostprocessResult {
 }
 
 /** 文脈（話題サマリ）と校正対象を1つの user メッセージにまとめる。
- *  参照情報と校正対象をデリミタで明示し、参照側は出力対象でないと指示する。
- *  user ターンを1つに保つことで「連続 user ＝全部が入力」と誤解され、
- *  文脈まで一緒に整形・出力されるのを防ぐ。 */
+ *  XMLタグで参照情報と校正対象を区別する。 */
 export function buildContextualUserMessage(
   context: string,
   transcript: string,
@@ -105,7 +103,6 @@ export function buildContextualUserMessage(
     role: "user",
     content:
       `<参考トピック>\n${context}\n</参考トピック>\n\n` +
-      `上記は誤変換補正のヒントであり、出力対象ではない。次の <校正対象> のテキストのみを校正して出力する。\n\n` +
       `<校正対象>\n${transcript}\n</校正対象>`,
   };
 }

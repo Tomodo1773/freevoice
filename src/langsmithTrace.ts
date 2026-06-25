@@ -41,7 +41,15 @@ function msToUnixNano(ms: number): string {
   return (BigInt(Math.trunc(ms)) * 1_000_000n).toString();
 }
 
-export interface FormatSpanParams {
+export interface LangsmithConfig {
+  region: LangsmithRegion;
+  project: string;
+  apiKey: string;
+  includeContent: boolean;
+}
+
+export interface LlmSpanParams {
+  spanName: string;
   provider: FormatProvider;
   requestModel: string;
   responseModel?: string;
@@ -57,11 +65,11 @@ export interface FormatSpanParams {
 }
 
 /**
- * 1 回のフォーマット呼び出しを OTLP/HTTP JSON の resourceSpans 形式で組み立てる。
+ * 1 回の LLM 呼び出しを OTLP/HTTP JSON の resourceSpans 形式で組み立てる。
  * OpenLLMetry の gen_ai.* semantic convention に準拠。
  */
-export function buildFormatSpanPayload(
-  params: FormatSpanParams,
+export function buildLlmSpanPayload(
+  params: LlmSpanParams,
   project: string
 ): object {
   const traceId = randomHex(16);
@@ -74,6 +82,7 @@ export function buildFormatSpanPayload(
     strAttr("gen_ai.operation.name", "chat"),
     strAttr("gen_ai.request.model", params.requestModel),
     strAttr("gen_ai.request.reasoning_effort", params.reasoningEffort),
+    strAttr("freevoice.operation", params.spanName),
   ];
 
   if (params.responseModel) {
@@ -137,7 +146,7 @@ export function buildFormatSpanPayload(
               {
                 traceId,
                 spanId,
-                name: "chat",
+                name: params.spanName,
                 kind: 3, // SPAN_KIND_CLIENT
                 startTimeUnixNano: msToUnixNano(params.startTimeMs),
                 endTimeUnixNano: msToUnixNano(params.endTimeMs),
@@ -153,24 +162,20 @@ export function buildFormatSpanPayload(
   };
 }
 
-export interface SendFormatSpanArgs extends FormatSpanParams {
-  region: LangsmithRegion;
-  project: string;
-  apiKey: string;
-}
+export type SendLlmSpanArgs = LlmSpanParams & LangsmithConfig;
 
 /**
- * LangSmith にフォーマット呼び出しのトレースを送信する。
+ * LangSmith に LLM 呼び出しのトレースを送信する。
  * 失敗はログ出力のみで握り潰し、アプリ本体の動作には影響させない。
  */
-export async function sendFormatSpan(args: SendFormatSpanArgs): Promise<void> {
+export async function sendLlmSpan(args: SendLlmSpanArgs): Promise<void> {
   if (!args.apiKey || !args.project) {
     logWarn("langsmith", "trace skipped", { reason: "missing api key or project" });
     return;
   }
   try {
     const endpoint = resolveLangsmithEndpoint(args.region);
-    const body = JSON.stringify(buildFormatSpanPayload(args, args.project));
+    const body = JSON.stringify(buildLlmSpanPayload(args, args.project));
     await invoke("post_langsmith_trace", {
       endpoint,
       apiKey: args.apiKey,
