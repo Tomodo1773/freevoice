@@ -332,7 +332,10 @@ export class TranscriptionSession {
 
       if (this.reconnectPromise) {
         await withTimeout(this.reconnectPromise, TranscriptionSession.RECONNECT_TIMEOUT_MS)
-          .catch(() => {});
+          .catch((e) => {
+            // 再接続が stop 時点で終わらずタイムアウト。テキスト取りこぼしの手掛かりになる。
+            logWarn("transcription.stop", "reconnect did not settle before stop", { error: e });
+          });
       }
 
       if (this.recognizer) {
@@ -341,8 +344,9 @@ export class TranscriptionSession {
           await new Promise<void>((resolve, reject) => {
             recognizer.stopContinuousRecognitionAsync(resolve, reject);
           });
-        } catch {
+        } catch (e) {
           // recognizer が不正な状態の場合 stopContinuousRecognitionAsync が失敗しうる
+          logWarn("transcription.stop", "stopContinuousRecognitionAsync failed", { error: e });
         }
       }
       this.closeRecognizer();
@@ -390,13 +394,25 @@ export class TranscriptionSession {
 
     this.mediaRecorder = null;
 
-    if (this.wasSilent) return "";
+    if (this.wasSilent) {
+      logInfo("transcription.stop", "azure-openai silent, skipping upload", {
+        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+      });
+      return "";
+    }
 
     const mimeType = recorder.mimeType || "audio/webm";
     const blob = new Blob(this.chunks, { type: mimeType });
     this.chunks = [];
 
-    if (blob.size === 0) return "";
+    if (blob.size === 0) {
+      // 無音ではないのに録音データが空。マイク供給停止などの異常なので WARN で残す。
+      logWarn("transcription.stop", "azure-openai empty recording blob", {
+        mimeType,
+        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+      });
+      return "";
+    }
 
     const form = new FormData();
     form.append("model", this.model);
@@ -418,6 +434,17 @@ export class TranscriptionSession {
     }
 
     const data = await res.json();
-    return typeof data?.text === "string" ? data.text : "";
+    if (typeof data?.text !== "string") {
+      // API は 2xx だが期待した形（text フィールド）で返らなかった。空返しの理由を残す。
+      logWarn("transcription.stop", "azure-openai response missing text field", {
+        blobSize: blob.size,
+      });
+      return "";
+    }
+    logInfo("transcription.stop", "azure-openai transcription received", {
+      textLen: data.text.length,
+      blobSize: blob.size,
+    });
+    return data.text;
   }
 }
