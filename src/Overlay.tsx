@@ -202,33 +202,41 @@ export default function Overlay() {
   }, [fading]);
 
   const handleStart = async () => {
-    // 処理中（transcribing/formatting）なら abort してキャンセル
+    // 処理中（transcribing/formatting）ならショートカット再押下で abort してキャンセル
     if (abortRef.current) {
-      logInfo("overlay.handleStart", "abort in-flight processing");
+      logInfo("overlay.handleStart", "cancel requested: aborting in-flight processing");
       abortRef.current.abort();
       return;
     }
-    // 多重起動ガード（最初の await より前に同期的にチェック）
-    if (sessionRef.current) return;
+    // 多重起動ガード（最初の await より前に同期的にチェック）。
+    // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
+    if (sessionRef.current) {
+      logWarn("overlay.handleStart", "start ignored: recording session already active");
+      return;
+    }
 
     logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
     recordingWindowPromiseRef.current = null;
 
     const now = new Date();
-    // 録音開始音
-    const ctx = new AudioContext();
-    const oscillator = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, ctx.currentTime);
-    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
-    oscillator.start(ctx.currentTime);
-    oscillator.stop(ctx.currentTime + 0.08);
-    oscillator.onended = () => ctx.close();
+    // 録音開始音。失敗しても録音本体は続行するため、握り潰さず記録だけする。
+    try {
+      const ctx = new AudioContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.08);
+      oscillator.onended = () => ctx.close();
+    } catch (e) {
+      logWarn("overlay.handleStart", "start beep failed", { error: e });
+    }
 
     let mediaStream: MediaStream | null = null;
     let settings = cachedSettingsRef.current;
@@ -312,7 +320,12 @@ export default function Overlay() {
         audioDeviceId: effectiveDeviceId,
         mediaStream,
         onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
+        // 原因は transcription 側が onRecognitionError 呼び出し前に logError 済みなので、
+        // ここでの再ログはノイズになる。UI 更新だけ行う。
         onRecognitionError: (msg) => dispatch({ type: "RECORDING_FAILED", errorMsg: msg }),
+      });
+      logInfo("overlay.handleStart", "recording started", {
+        provider: settings.transcriptionProvider,
       });
     } catch (e) {
       // セッション作成済みならミュート解除。MediaStream が掴まれていれば確実に解放。
@@ -334,7 +347,14 @@ export default function Overlay() {
   const handleStop = async () => {
     // await より前にセッションを退避・クリア（多重起動対策）
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session) {
+      // キーを離したのに何も起きない事象を追えるよう、無視した stop も記録する。
+      // phase は listener が mount 時クロージャを掴むため参照しない（stale になる）。
+      logInfo("overlay.handleStop", "stop ignored: no active session", {
+        processing: abortRef.current !== null,
+      });
+      return;
+    }
     sessionRef.current = null;
 
     logInfo("overlay.handleStop", "stop");
@@ -363,12 +383,21 @@ export default function Overlay() {
       if (!raw.trim()) {
         abortRef.current = null;
         const logEmpty = session.wasSilent ? logInfo : logWarn;
-        logEmpty("overlay.handleStop", "empty transcript", { silent: session.wasSilent });
+        logEmpty("overlay.handleStop", "empty transcript", {
+          silent: session.wasSilent,
+          provider: settings.transcriptionProvider,
+        });
         dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
         return;
       }
 
       rawTranscript = raw;
+      // 「文字起こしは取れたが以降が進まない」事象の切り分け用に、整形へ渡す直前を記録する。
+      logInfo("overlay.handleStop", "transcript received, starting format", {
+        provider: settings.transcriptionProvider,
+        transcriptLen: raw.length,
+        hasContext: !!injectedContext,
+      });
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
       const formatModel = settings.formatProvider === "openai" ? settings.openaiFormatModel : settings.azureFormatModel;
       const formatStartMs = Date.now();
@@ -393,6 +422,12 @@ export default function Overlay() {
       );
       const formatEndMs = Date.now();
       formattedText = formatted;
+      logInfo("overlay.handleStop", "format complete", {
+        fallback,
+        fallbackReason,
+        formattedLen: formatted.length,
+        durationMs: formatEndMs - formatStartMs,
+      });
 
       const langsmithConfig = settings.langsmithEnabled ? {
         region: settings.langsmithRegion,
@@ -421,6 +456,7 @@ export default function Overlay() {
       }
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
+      logInfo("overlay.handleStop", "pasted", { method: settings.inputMethod, textLen: formatted.length });
       dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });
 
       // paste 後に非同期で話題コンテキストを更新（レイテンシに影響させない）。
@@ -437,7 +473,12 @@ export default function Overlay() {
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
-        logInfo("overlay.handleStop", "cancelled by user");
+        // 再操作による中断。貼り付けまで到達しなかった理由をブレッドクラムとして残す。
+        logInfo("overlay.handleStop", "cancelled by user (re-trigger during processing)", {
+          hadTranscript: !!rawTranscript,
+          transcriptLen: rawTranscript.length,
+          formatted: formattedText !== "",
+        });
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
         dispatch({ type: "ABORT_CANCELLED" });

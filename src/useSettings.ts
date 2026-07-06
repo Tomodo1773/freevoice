@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { resolveAzureOpenAIBase } from "./azureOpenaiEndpoint";
 import { AppSettings, DEFAULT_SETTINGS } from "./types";
+import { logError } from "./diagLog";
 
 const STORAGE_KEY = "freevoice-settings";
 
@@ -49,8 +50,10 @@ export function loadSettings(): AppSettings {
     if (stored) {
       return normalizeSettings(JSON.parse(stored) as Partial<AppSettings>);
     }
-  } catch {
-    // ignore
+  } catch (e) {
+    // 設定の読み込み失敗はデフォルトに戻る＝ユーザーには「設定が消えた」ように見える。
+    // 原因（破損した localStorage 等）を必ず残す。
+    logError("useSettings.loadSettings", "failed to load settings, using defaults", e);
   }
   return DEFAULT_SETTINGS;
 }

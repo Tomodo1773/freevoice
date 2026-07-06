@@ -529,6 +529,31 @@ pub fn run() {
             mutex: Mutex::new(()),
         })
         .setup(|app| {
+            // パニックを最後の砦として診断ログに残す。windowed リリースビルドでは
+            // stderr が見えないため、これが無いと Rust 側の異常終了は痕跡ゼロになる。
+            let panic_app = app.handle().clone();
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let location = info
+                    .location()
+                    .map(|l| format!("{}:{}", l.file(), l.line()))
+                    .unwrap_or_else(|| "unknown".to_string());
+                let payload = info
+                    .payload()
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("(non-string panic payload)");
+                diag_log_err(
+                    &panic_app,
+                    "ERROR",
+                    "rust.panic",
+                    &format!("panic at {location}"),
+                    payload,
+                );
+                default_hook(info);
+            }));
+
             // 起動マーカー（以降の記録が同一プロセスのものか判別するため）
             diag_log(app.handle(), "INFO", "app.setup", "startup");
 

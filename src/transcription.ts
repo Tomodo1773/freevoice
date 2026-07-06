@@ -184,26 +184,68 @@ export class TranscriptionSession {
     };
 
     recognizer.canceled = (_, e) => {
-      if (this.stopping || !this.reconnectEnabled) return;
-      if (e.reason !== SDK.CancellationReason.Error) return;
+      // 原因究明のため、どの分岐に入るかに関わらず canceled は必ず記録する。
+      // 「認識中に突然止まったのにログに何も残らない」状態を根絶する。
+      const diag = {
+        reason: SDK.CancellationReason[e.reason] ?? e.reason,
+        errorCode: SDK.CancellationErrorCode[e.errorCode] ?? e.errorCode,
+        errorDetails: e.errorDetails ?? "",
+        stopping: this.stopping,
+        reconnectEnabled: this.reconnectEnabled,
+        reconnectCount: this.reconnectCount,
+        recognizedCount: this.recognizedTexts.length,
+        hadInterim: !!this.lastInterimText,
+      };
 
+      // stop() 由来の canceled（正常終了）は情報ログのみ
+      if (this.stopping) {
+        logInfo("transcription.canceled", "canceled during stop (normal)", diag);
+        return;
+      }
+      // 初回接続確立前の canceled は start() 側の reject に委ねる（二重処理を防ぐ）
+      if (!this.reconnectEnabled) {
+        logWarn("transcription.canceled", "canceled before recognizer ready", diag);
+        return;
+      }
+
+      // 録音中の中断。Error（接続失敗・サービス側の一時障害）に加え、
+      // EndOfStream（サービス/ネットワークがストリームを閉じた）も再接続対象とする。
+      // マイク入力は stop するまで終端しないため、録音中の EndOfStream は異常であり、
+      // これを握り潰していたことがシナリオ2（途中から認識されない）の原因だった。
       const retryable =
-        e.errorCode === SDK.CancellationErrorCode.ConnectionFailure ||
-        e.errorCode === SDK.CancellationErrorCode.ServiceTimeout ||
-        e.errorCode === SDK.CancellationErrorCode.ServiceError ||
-        e.errorCode === SDK.CancellationErrorCode.RuntimeError;
+        e.reason === SDK.CancellationReason.EndOfStream ||
+        (e.reason === SDK.CancellationReason.Error &&
+          (e.errorCode === SDK.CancellationErrorCode.ConnectionFailure ||
+            e.errorCode === SDK.CancellationErrorCode.ServiceTimeout ||
+            e.errorCode === SDK.CancellationErrorCode.ServiceError ||
+            e.errorCode === SDK.CancellationErrorCode.RuntimeError));
 
       if (!retryable || this.reconnectCount >= TranscriptionSession.MAX_RECONNECTS) {
-        logError("transcription.canceled", "recognition canceled (not retryable)", new Error(e.errorDetails ?? ""), {
-          errorCode: e.errorCode,
-          reconnectCount: this.reconnectCount,
-        });
+        logError(
+          "transcription.canceled",
+          "recognition canceled mid-recording (giving up)",
+          new Error(e.errorDetails || `reason=${diag.reason}`),
+          diag,
+        );
         this.onRecognitionError?.("音声認識が切断されました");
         return;
       }
 
+      logWarn("transcription.canceled", "recognition interrupted mid-recording, will reconnect", diag);
       if (this.reconnectPromise) return;
       void this.attemptReconnect(e.errorCode, e.errorDetails ?? "");
+    };
+
+    // セッションがサービス側で終了した際の痕跡を必ず残す。
+    // stop() 由来（正常終了）は記録しないが、録音中の予期しない終了は WARN で残し、
+    // canceled が発火しないケースでも「認識が黙って止まった」ことを追えるようにする。
+    recognizer.sessionStopped = (_, e) => {
+      if (this.stopping) return;
+      logWarn("transcription.sessionStopped", "session stopped unexpectedly mid-recording", {
+        sessionId: e.sessionId,
+        recognizedCount: this.recognizedTexts.length,
+        reconnectCount: this.reconnectCount,
+      });
     };
 
     this.recognizer = recognizer;
@@ -290,7 +332,10 @@ export class TranscriptionSession {
 
       if (this.reconnectPromise) {
         await withTimeout(this.reconnectPromise, TranscriptionSession.RECONNECT_TIMEOUT_MS)
-          .catch(() => {});
+          .catch((e) => {
+            // 再接続が stop 時点で終わらずタイムアウト。テキスト取りこぼしの手掛かりになる。
+            logWarn("transcription.stop", "reconnect did not settle before stop", { error: e });
+          });
       }
 
       if (this.recognizer) {
@@ -299,8 +344,9 @@ export class TranscriptionSession {
           await new Promise<void>((resolve, reject) => {
             recognizer.stopContinuousRecognitionAsync(resolve, reject);
           });
-        } catch {
+        } catch (e) {
           // recognizer が不正な状態の場合 stopContinuousRecognitionAsync が失敗しうる
+          logWarn("transcription.stop", "stopContinuousRecognitionAsync failed", { error: e });
         }
       }
       this.closeRecognizer();
@@ -311,13 +357,27 @@ export class TranscriptionSession {
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
       const finalText = this.recognizedTexts.join("");
-      if (finalText) return finalText;
+      if (finalText) {
+        logInfo("transcription.stop", "azure-speech final text ready", {
+          recognizedCount: this.recognizedTexts.length,
+          finalLen: finalText.length,
+          reconnectCount: this.reconnectCount,
+        });
+        return finalText;
+      }
       if (this.lastInterimText) {
         logWarn("transcription.stop", "azure-speech interim fallback used", {
           interimLen: this.lastInterimText.length,
+          reconnectCount: this.reconnectCount,
         });
         return this.lastInterimText;
       }
+      // 確定・暫定ともに空。音声レベルの痕跡を残し、無音なのか認識喪失なのかを切り分ける。
+      logWarn("transcription.stop", "azure-speech produced no text", {
+        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+        wasSilent: this.wasSilent,
+        reconnectCount: this.reconnectCount,
+      });
       return "";
     }
 
@@ -334,13 +394,25 @@ export class TranscriptionSession {
 
     this.mediaRecorder = null;
 
-    if (this.wasSilent) return "";
+    if (this.wasSilent) {
+      logInfo("transcription.stop", "azure-openai silent, skipping upload", {
+        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+      });
+      return "";
+    }
 
     const mimeType = recorder.mimeType || "audio/webm";
     const blob = new Blob(this.chunks, { type: mimeType });
     this.chunks = [];
 
-    if (blob.size === 0) return "";
+    if (blob.size === 0) {
+      // 無音ではないのに録音データが空。マイク供給停止などの異常なので WARN で残す。
+      logWarn("transcription.stop", "azure-openai empty recording blob", {
+        mimeType,
+        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+      });
+      return "";
+    }
 
     const form = new FormData();
     form.append("model", this.model);
@@ -362,6 +434,17 @@ export class TranscriptionSession {
     }
 
     const data = await res.json();
-    return typeof data?.text === "string" ? data.text : "";
+    if (typeof data?.text !== "string") {
+      // API は 2xx だが期待した形（text フィールド）で返らなかった。空返しの理由を残す。
+      logWarn("transcription.stop", "azure-openai response missing text field", {
+        blobSize: blob.size,
+      });
+      return "";
+    }
+    logInfo("transcription.stop", "azure-openai transcription received", {
+      textLen: data.text.length,
+      blobSize: blob.size,
+    });
+    return data.text;
   }
 }
