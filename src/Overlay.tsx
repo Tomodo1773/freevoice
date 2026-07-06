@@ -334,7 +334,11 @@ export default function Overlay() {
   const handleStop = async () => {
     // await より前にセッションを退避・クリア（多重起動対策）
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session) {
+      // キーを離したのに何も起きない事象を追えるよう、無視した stop も記録する。
+      logInfo("overlay.handleStop", "stop ignored: no active session", { phase });
+      return;
+    }
     sessionRef.current = null;
 
     logInfo("overlay.handleStop", "stop");
@@ -363,12 +367,21 @@ export default function Overlay() {
       if (!raw.trim()) {
         abortRef.current = null;
         const logEmpty = session.wasSilent ? logInfo : logWarn;
-        logEmpty("overlay.handleStop", "empty transcript", { silent: session.wasSilent });
+        logEmpty("overlay.handleStop", "empty transcript", {
+          silent: session.wasSilent,
+          provider: settings.transcriptionProvider,
+        });
         dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
         return;
       }
 
       rawTranscript = raw;
+      // 「文字起こしは取れたが以降が進まない」事象の切り分け用に、整形へ渡す直前を記録する。
+      logInfo("overlay.handleStop", "transcript received, starting format", {
+        provider: settings.transcriptionProvider,
+        transcriptLen: raw.length,
+        hasContext: !!injectedContext,
+      });
       dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
       const formatModel = settings.formatProvider === "openai" ? settings.openaiFormatModel : settings.azureFormatModel;
       const formatStartMs = Date.now();
@@ -393,6 +406,12 @@ export default function Overlay() {
       );
       const formatEndMs = Date.now();
       formattedText = formatted;
+      logInfo("overlay.handleStop", "format complete", {
+        fallback,
+        fallbackReason,
+        formattedLen: formatted.length,
+        durationMs: formatEndMs - formatStartMs,
+      });
 
       const langsmithConfig = settings.langsmithEnabled ? {
         region: settings.langsmithRegion,
@@ -421,6 +440,7 @@ export default function Overlay() {
       }
 
       await invoke("paste_text", { text: formatted, method: settings.inputMethod });
+      logInfo("overlay.handleStop", "pasted", { method: settings.inputMethod, textLen: formatted.length });
       dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });
 
       // paste 後に非同期で話題コンテキストを更新（レイテンシに影響させない）。
@@ -437,7 +457,12 @@ export default function Overlay() {
     } catch (e) {
       // AbortError はキャンセルなので即非表示（フェード不要）
       if (e instanceof DOMException && e.name === "AbortError") {
-        logInfo("overlay.handleStop", "cancelled by user");
+        // 再操作による中断。貼り付けまで到達しなかった理由をブレッドクラムとして残す。
+        logInfo("overlay.handleStop", "cancelled by user (re-trigger during processing)", {
+          hadTranscript: !!rawTranscript,
+          transcriptLen: rawTranscript.length,
+          formatted: formattedText !== "",
+        });
         const appWindow = getCurrentWebviewWindow();
         await appWindow.hide();
         dispatch({ type: "ABORT_CANCELLED" });
