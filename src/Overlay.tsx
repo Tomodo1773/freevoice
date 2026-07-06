@@ -320,11 +320,9 @@ export default function Overlay() {
         audioDeviceId: effectiveDeviceId,
         mediaStream,
         onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
-        onRecognitionError: (msg) => {
-          // 認識セッションからのエラー通知。オーバーレイ更新と別に必ず記録する。
-          logWarn("overlay.onRecognitionError", "recognition error surfaced to overlay", { message: msg });
-          dispatch({ type: "RECORDING_FAILED", errorMsg: msg });
-        },
+        // 原因は transcription 側が onRecognitionError 呼び出し前に logError 済みなので、
+        // ここでの再ログはノイズになる。UI 更新だけ行う。
+        onRecognitionError: (msg) => dispatch({ type: "RECORDING_FAILED", errorMsg: msg }),
       });
       logInfo("overlay.handleStart", "recording started", {
         provider: settings.transcriptionProvider,
