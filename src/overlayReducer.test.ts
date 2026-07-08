@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { overlayReducer, initialState, OverlayState, OverlayAction } from "./overlayReducer";
+import {
+  overlayReducer,
+  initialState,
+  decideStartEdge,
+  decideStopEdge,
+  OverlayState,
+  OverlayAction,
+} from "./overlayReducer";
 
 /** reducer を連続適用するヘルパー */
 function applyActions(state: OverlayState, actions: OverlayAction[]): OverlayState {
@@ -111,27 +118,41 @@ describe("overlayReducer", () => {
   });
 
   describe("空結果", () => {
-    it("無音の場合: transcribing → recording + 1500ms hide", () => {
+    it("無音の場合: transcribing → nospeech + 1500ms hide", () => {
       const transcribing = applyActions(initialState, [
         { type: "RECORDING_START" },
         { type: "STOP_TRANSCRIBING" },
       ]);
 
       const result = overlayReducer(transcribing, { type: "TRANSCRIPT_EMPTY", silent: true });
-      expect(result.phase).toBe("recording");
+      expect(result.phase).toBe("nospeech");
       expect(result.transcript).toBe("音声が検出されませんでした");
       expect(result.hideRequest!.ms).toBe(1500);
     });
 
-    it("非無音の空結果: transcribing のまま + 150ms hide", () => {
+    it("非無音の空結果: transcribing → done + 150ms hide", () => {
       const transcribing = applyActions(initialState, [
         { type: "RECORDING_START" },
         { type: "STOP_TRANSCRIBING" },
       ]);
 
       const result = overlayReducer(transcribing, { type: "TRANSCRIPT_EMPTY", silent: false });
-      expect(result.phase).toBe("transcribing");
+      expect(result.phase).toBe("done");
       expect(result.hideRequest!.ms).toBe(150);
+    });
+
+    it("nospeech（無音終端）→ RECORDING_START → recording（リトライできる）", () => {
+      const nospeech = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "STOP_TRANSCRIBING" },
+        { type: "TRANSCRIPT_EMPTY", silent: true },
+      ]);
+      expect(nospeech.phase).toBe("nospeech");
+
+      const recording = overlayReducer(nospeech, { type: "RECORDING_START" });
+      expect(recording.phase).toBe("recording");
+      expect(recording.hideRequest).toBeNull();
+      expect(recording.transcript).toBe("");
     });
   });
 
@@ -258,19 +279,53 @@ describe("overlayReducer", () => {
     });
   });
 
+  describe("キーエッジ判定（ガード単一化）", () => {
+    it("decideStartEdge: idle/done/error/nospeech は start", () => {
+      expect(decideStartEdge("idle")).toBe("start");
+      expect(decideStartEdge("done")).toBe("start");
+      expect(decideStartEdge("error")).toBe("start");
+      expect(decideStartEdge("nospeech")).toBe("start");
+    });
+
+    it("decideStartEdge: recording は ignore", () => {
+      expect(decideStartEdge("recording")).toBe("ignore");
+    });
+
+    it("decideStartEdge: transcribing/formatting は cancel", () => {
+      expect(decideStartEdge("transcribing")).toBe("cancel");
+      expect(decideStartEdge("formatting")).toBe("cancel");
+    });
+
+    it("decideStopEdge: recording のみ stop、それ以外は ignore", () => {
+      expect(decideStopEdge("recording")).toBe("stop");
+      expect(decideStopEdge("idle")).toBe("ignore");
+      expect(decideStopEdge("transcribing")).toBe("ignore");
+      expect(decideStopEdge("formatting")).toBe("ignore");
+      expect(decideStopEdge("done")).toBe("ignore");
+      expect(decideStopEdge("error")).toBe("ignore");
+      expect(decideStopEdge("nospeech")).toBe("ignore");
+    });
+  });
+
   describe("hideRequest の seq がインクリメントされる", () => {
-    it("同一フロー内で連続する hideRequest は seq がインクリメントされる", () => {
-      // RECORDING_START → STOP_TRANSCRIBING → TRANSCRIPT_EMPTY(silent) → seq=1
+    it("通常フローの hideRequest は seq=1", () => {
       const s1 = applyActions(initialState, [
         { type: "RECORDING_START" },
         { type: "STOP_TRANSCRIBING" },
         { type: "TRANSCRIPT_EMPTY", silent: true },
       ]);
       expect(s1.hideRequest!.seq).toBe(1);
+    });
 
-      // 同じ state から RECORDING_FAILED → seq=2
-      const s2 = overlayReducer(s1, { type: "RECORDING_FAILED", errorMsg: "err" });
-      expect(s2.hideRequest!.seq).toBe(2);
+    it("既存の hideRequest を持つ状態からの新たな hideRequest は seq を +1 する", () => {
+      // seq は「非表示予約の世代」。前回の予約が残る状態から新たな予約が入ると加算される。
+      const base: OverlayState = {
+        ...initialState,
+        phase: "recording",
+        hideRequest: { ms: 100, seq: 1 },
+      };
+      const failed = overlayReducer(base, { type: "RECORDING_FAILED", errorMsg: "err" });
+      expect(failed.hideRequest!.seq).toBe(2);
     });
   });
 });

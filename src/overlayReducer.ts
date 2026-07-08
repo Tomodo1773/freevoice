@@ -4,7 +4,9 @@ export type OverlayPhase =
   | "transcribing"
   | "formatting"
   | "done"
-  | "error";
+  | "error"
+  /** 無音で終了した終端表示。制御上は idle/done と同じく「次の録音を開始できる」状態。 */
+  | "nospeech";
 
 export interface OverlayState {
   phase: OverlayPhase;
@@ -47,9 +49,9 @@ function nextSeq(state: OverlayState): number {
 export function overlayReducer(state: OverlayState, action: OverlayAction): OverlayState {
   switch (action.type) {
     case "RECORDING_START": {
-      const canStart = state.phase === "idle" || state.fading
-        || state.phase === "done" || state.phase === "error";
-      if (!canStart) return state;
+      // 開始可否のガードは decideStartEdge に一本化（ハンドラの分岐と同一の唯一の定義）。
+      // fading は終端 phase(done/error/nospeech)に必ず伴うため phase だけで判定できる。
+      if (decideStartEdge(state.phase) !== "start") return state;
       return { ...initialState, phase: "recording" };
     }
 
@@ -72,12 +74,20 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
 
     case "TRANSCRIPT_EMPTY":
       if (state.phase !== "transcribing") return state;
-      return {
-        ...state,
-        phase: action.silent ? "recording" : state.phase,
-        transcript: action.silent ? "音声が検出されませんでした" : state.transcript,
-        hideRequest: { ms: action.silent ? 1500 : 150, seq: nextSeq(state) },
-      };
+      // 無音は専用の終端 nospeech（メッセージ表示・1500ms）。
+      // 非無音の空結果は通常の終端 done（150ms）へ畳む。いずれも制御上は「開始可能」。
+      return action.silent
+        ? {
+            ...state,
+            phase: "nospeech",
+            transcript: "音声が検出されませんでした",
+            hideRequest: { ms: 1500, seq: nextSeq(state) },
+          }
+        : {
+            ...state,
+            phase: "done",
+            hideRequest: { ms: 150, seq: nextSeq(state) },
+          };
 
     case "TRANSCRIPT_READY":
       if (state.phase !== "transcribing") return state;
@@ -119,4 +129,53 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
     default:
       return state;
   }
+}
+
+/**
+ * キーエッジ（recording-start）の意味を現在の制御状態だけから決める唯一のガード。
+ * ハンドラ側の ref 判定を排し、判定を1箇所（＝status）に集約する。
+ */
+export type StartEdge = "start" | "cancel" | "ignore";
+
+export function decideStartEdge(phase: OverlayPhase): StartEdge {
+  if (phase === "recording") return "ignore"; // 既に録音中
+  if (phase === "transcribing" || phase === "formatting") return "cancel"; // 処理中の再押下＝キャンセル
+  return "start"; // idle / done / error / nospeech — 次の録音を開始
+}
+
+/** キーエッジ（recording-stop）の意味。録音中のみ停止し、それ以外は無視する。 */
+export function decideStopEdge(phase: OverlayPhase): "stop" | "ignore" {
+  return phase === "recording" ? "stop" : "ignore";
+}
+
+/**
+ * overlayReducer を包む最小ストア。制御 status を単一の真実として同期的に読める。
+ * useReducer と違い dispatch 時点で getState() が即更新されるため、mount 時クロージャの
+ * イベントハンドラからでも最新 status を読め（stale closure 問題の根本解消）、
+ * 連続するキーエッジも同一 tick 内で正しく判定できる。
+ */
+export interface OverlayStore {
+  getState: () => OverlayState;
+  dispatch: (action: OverlayAction) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+export function createOverlayStore(): OverlayStore {
+  let state = initialState;
+  const listeners = new Set<() => void>();
+  return {
+    getState: () => state,
+    dispatch: (action) => {
+      const next = overlayReducer(state, action);
+      if (next === state) return; // 無効遷移（reducer が同一参照を返す）は購読者に通知しない
+      state = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
