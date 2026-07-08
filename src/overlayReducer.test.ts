@@ -130,14 +130,15 @@ describe("overlayReducer", () => {
       expect(result.hideRequest!.ms).toBe(1500);
     });
 
-    it("非無音の空結果: transcribing → done + 150ms hide", () => {
+    it("非無音の空結果: transcribing → nospeech + 150ms hide（成功表示は出さない）", () => {
       const transcribing = applyActions(initialState, [
         { type: "RECORDING_START" },
         { type: "STOP_TRANSCRIBING" },
       ]);
 
       const result = overlayReducer(transcribing, { type: "TRANSCRIPT_EMPTY", silent: false });
-      expect(result.phase).toBe("done");
+      expect(result.phase).toBe("nospeech");
+      expect(result.transcript).toBe("音声が検出されませんでした");
       expect(result.hideRequest!.ms).toBe(150);
     });
 

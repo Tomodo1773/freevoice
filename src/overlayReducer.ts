@@ -74,20 +74,14 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
 
     case "TRANSCRIPT_EMPTY":
       if (state.phase !== "transcribing") return state;
-      // 無音は専用の終端 nospeech（メッセージ表示・1500ms）。
-      // 非無音の空結果は通常の終端 done（150ms）へ畳む。いずれも制御上は「開始可能」。
-      return action.silent
-        ? {
-            ...state,
-            phase: "nospeech",
-            transcript: "音声が検出されませんでした",
-            hideRequest: { ms: 1500, seq: nextSeq(state) },
-          }
-        : {
-            ...state,
-            phase: "done",
-            hideRequest: { ms: 150, seq: nextSeq(state) },
-          };
+      // 空結果はいずれも「取れなかった」終端 nospeech。成功表示(done)は出さない。
+      // 無音は明示メッセージを 1500ms、非無音（稀）は素早く 150ms で畳む。
+      return {
+        ...state,
+        phase: "nospeech",
+        transcript: "音声が検出されませんでした",
+        hideRequest: { ms: action.silent ? 1500 : 150, seq: nextSeq(state) },
+      };
 
     case "TRANSCRIPT_READY":
       if (state.phase !== "transcribing") return state;
