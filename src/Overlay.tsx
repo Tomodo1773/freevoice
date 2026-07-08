@@ -207,6 +207,19 @@ export default function Overlay() {
     return () => clearTimeout(timer);
   }, [fading]);
 
+  // 処理（transcribing/formatting）への遷移と、キャンセル用 AbortController を対で扱う。
+  // set と dispatch を1関数に閉じ込め、「abortRef 非null ⟺ 処理中 status」の整合を
+  // 実行順序ではなく構造で担保する（並べ替えで静かにキャンセルが壊れるのを防ぐ）。
+  const beginProcessing = (): AbortController => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    dispatch({ type: "STOP_TRANSCRIBING" });
+    return controller;
+  };
+  const endProcessing = () => {
+    abortRef.current = null;
+  };
+
   const handleStart = async () => {
     // キーエッジの意味は現在の status だけから決める（判定を1箇所に集約）。
     // 最初の await より前に同期的に評価する。
@@ -371,10 +384,9 @@ export default function Overlay() {
 
     // status が recording でない（例: 認識エラーで既に error へ遷移済み）場合は、
     // 文字起こし/整形パイプラインを回さずリソース解放だけ行う。
-    if (decideStopEdge(store.getState().phase) !== "stop") {
-      logInfo("overlay.handleStop", "release without pipeline", {
-        phase: store.getState().phase,
-      });
+    const phaseAtStop = store.getState().phase;
+    if (decideStopEdge(phaseAtStop) !== "stop") {
+      logInfo("overlay.handleStop", "release without pipeline", { phase: phaseAtStop });
       await session.stop().catch((e: unknown) =>
         logWarn("overlay.handleStop", "cleanup stop failed", { error: e })
       );
@@ -394,14 +406,12 @@ export default function Overlay() {
     let formattedText = "";
     let stopError: unknown = null;
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-    dispatch({ type: "STOP_TRANSCRIBING" });
+    const controller = beginProcessing();
 
     try {
       const raw = await session.stop(controller.signal);
       if (!raw.trim()) {
-        abortRef.current = null;
+        endProcessing();
         const logEmpty = session.wasSilent ? logInfo : logWarn;
         logEmpty("overlay.handleStop", "empty transcript", {
           silent: session.wasSilent,
@@ -508,7 +518,7 @@ export default function Overlay() {
       logError("overlay.handleStop", "stop failed", e);
       dispatch({ type: "STOP_ERROR", errorMsg: toUserMessage(e) });
     } finally {
-      abortRef.current = null;
+      endProcessing();
       const configuredFolder = settings.logFolder.trim();
       const hasError = stopError !== null && formattedText === "";
       // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力

@@ -49,12 +49,9 @@ function nextSeq(state: OverlayState): number {
 export function overlayReducer(state: OverlayState, action: OverlayAction): OverlayState {
   switch (action.type) {
     case "RECORDING_START": {
-      const canStart = state.fading
-        || state.phase === "idle"
-        || state.phase === "done"
-        || state.phase === "error"
-        || state.phase === "nospeech";
-      if (!canStart) return state;
+      // 開始可否のガードは decideStartEdge に一本化（ハンドラの分岐と同一の唯一の定義）。
+      // fading は終端 phase(done/error/nospeech)に必ず伴うため phase だけで判定できる。
+      if (decideStartEdge(state.phase) !== "start") return state;
       return { ...initialState, phase: "recording" };
     }
 
