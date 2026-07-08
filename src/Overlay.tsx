@@ -236,6 +236,16 @@ export default function Overlay() {
       return;
     }
 
+    // onRecognitionError は error へ遷移させるがセッションは解放しない（phase 判定では拾えない）。
+    // 新規録音を始める前に、居残った旧セッションを確実に解放してリソースリークを防ぐ。
+    const staleSession = sessionRef.current;
+    if (staleSession) {
+      sessionRef.current = null;
+      void staleSession.stop().catch((e: unknown) =>
+        logWarn("overlay.handleStart", "stale session cleanup failed", { error: e })
+      );
+    }
+
     logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
     recordingWindowPromiseRef.current = null;
