@@ -1,4 +1,4 @@
-import { useState, useReducer, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -8,7 +8,7 @@ import { getContext, refreshContext } from "./windowContext";
 import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
-import { overlayReducer, initialState } from "./overlayReducer";
+import { createOverlayStore, decideStartEdge, decideStopEdge } from "./overlayReducer";
 import { formatError } from "./errors";
 import { logInfo, logWarn, logError } from "./diagLog";
 
@@ -68,7 +68,13 @@ async function trySaveLog(
 }
 
 export default function Overlay() {
-  const [state, dispatch] = useReducer(overlayReducer, initialState);
+  // 制御 status の単一ストア。UI は購読して描画し、イベントハンドラは store.getState() で
+  // 最新 status を同期読み取りする（sessionRef/abortRef は状態判定に使わず実行リソースに降格）。
+  const storeRef = useRef<ReturnType<typeof createOverlayStore> | null>(null);
+  if (storeRef.current === null) storeRef.current = createOverlayStore();
+  const store = storeRef.current;
+  const state = useSyncExternalStore(store.subscribe, store.getState);
+  const dispatch = store.dispatch;
   const { phase, transcript, errorMsg, fallback, fallbackReason, fading, hideRequest } = state;
 
   const [audioLevel, setAudioLevel] = useState(0);
@@ -202,16 +208,18 @@ export default function Overlay() {
   }, [fading]);
 
   const handleStart = async () => {
-    // 処理中（transcribing/formatting）ならショートカット再押下で abort してキャンセル
-    if (abortRef.current) {
+    // キーエッジの意味は現在の status だけから決める（判定を1箇所に集約）。
+    // 最初の await より前に同期的に評価する。
+    const edge = decideStartEdge(store.getState().phase);
+    if (edge === "cancel") {
+      // 処理中（transcribing/formatting）の再押下＝キャンセル。abortRef は status に従属する実行リソース。
       logInfo("overlay.handleStart", "cancel requested: aborting in-flight processing");
-      abortRef.current.abort();
+      abortRef.current?.abort();
       return;
     }
-    // 多重起動ガード（最初の await より前に同期的にチェック）。
-    // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
-    if (sessionRef.current) {
-      logWarn("overlay.handleStart", "start ignored: recording session already active");
+    if (edge === "ignore") {
+      // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
+      logWarn("overlay.handleStart", "start ignored: recording already active");
       return;
     }
 
@@ -345,23 +353,35 @@ export default function Overlay() {
   };
 
   const handleStop = async () => {
-    // await より前にセッションを退避・クリア（多重起動対策）
+    // await より前に実行リソース（session）を退避・クリア（多重起動対策）。
     const session = sessionRef.current;
     if (!session) {
       // キーを離したのに何も起きない事象を追えるよう、無視した stop も記録する。
-      // phase は listener が mount 時クロージャを掴むため参照しない（stale になる）。
       logInfo("overlay.handleStop", "stop ignored: no active session", {
+        phase: store.getState().phase,
         processing: abortRef.current !== null,
       });
       return;
     }
     sessionRef.current = null;
 
-    logInfo("overlay.handleStop", "stop");
     invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) =>
       logWarn("overlay.handleStop", "set_system_audio_mute(false) failed", { error: e })
     );
 
+    // status が recording でない（例: 認識エラーで既に error へ遷移済み）場合は、
+    // 文字起こし/整形パイプラインを回さずリソース解放だけ行う。
+    if (decideStopEdge(store.getState().phase) !== "stop") {
+      logInfo("overlay.handleStop", "release without pipeline", {
+        phase: store.getState().phase,
+      });
+      await session.stop().catch((e: unknown) =>
+        logWarn("overlay.handleStop", "cleanup stop failed", { error: e })
+      );
+      return;
+    }
+
+    logInfo("overlay.handleStop", "stop");
     const settings = cachedSettingsRef.current;
 
     // 録音開始時に起動したウィンドウ取得を解決（録音中に完了済みのはず）し、話題コンテキストを引く
@@ -504,9 +524,12 @@ export default function Overlay() {
     }
   };
 
+  // nospeech（無音終端）は表示上は recording と同じ「listening」系で扱い、現行の見た目を温存する。
+  const isRecordingLike = phase === "recording" || phase === "nospeech";
+
   // phase から既存 CSS クラス名へのマッピング（CSS変更不要にする）
   const cssStatus =
-    (phase === "recording" || phase === "idle") ? "listening" : phase;
+    (isRecordingLike || phase === "idle") ? "listening" : phase;
 
   const pillClass = [
     "overlay-pill",
@@ -517,14 +540,14 @@ export default function Overlay() {
     .join(" ");
 
   const icon =
-    phase === "recording" ? "●" :
+    isRecordingLike ? "●" :
     (phase === "transcribing" || phase === "formatting") ? <span className="spinner">◌</span> :
     phase === "done" ? "✓" :
     phase === "error" ? "!" :
     null;
 
   const statusLabel =
-    phase === "recording"
+    isRecordingLike
       ? "Recording"
       : phase === "transcribing"
       ? "Transcribing"
@@ -537,7 +560,7 @@ export default function Overlay() {
       : "";
 
   const text =
-    phase === "recording"
+    isRecordingLike
       ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
       : phase === "transcribing"
       ? "Transcribing..."
@@ -565,8 +588,8 @@ export default function Overlay() {
             </span>
           )}
           <span
-            ref={phase === "recording" && transcript ? realtimeTextRef : undefined}
-            className={`overlay-text${phase === "error" ? " overlay-text-error" : ""}${phase === "recording" && transcript ? " overlay-text-realtime" : ""}`}
+            ref={isRecordingLike && transcript ? realtimeTextRef : undefined}
+            className={`overlay-text${phase === "error" ? " overlay-text-error" : ""}${isRecordingLike && transcript ? " overlay-text-realtime" : ""}`}
           >
             {text}
           </span>
