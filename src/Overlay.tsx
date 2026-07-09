@@ -12,6 +12,10 @@ import { createOverlayStore, decideStartEdge, decideStopEdge } from "./overlayRe
 import { formatError } from "./errors";
 import { logInfo, logWarn, logError } from "./diagLog";
 
+/** 開始処理がこの時間内に session を確立できなければ「停滞」とみなし、再押下での再試行を許す。
+ *  通常のマイク初期化（100-300ms）や短い権限応答では発火せず、真に hang した場合のみ復帰させる。 */
+const START_STALL_MS = 4000;
+
 /** 詳細なエラーを短い定型メッセージに変換する（オーバーレイ表示用） */
 function toUserMessage(err: unknown): string {
   const msg = formatError(err);
@@ -85,6 +89,10 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 開始試行の世代とその開始時刻。getUserMedia 等が停滞して phase=recording のまま
+  // session が確立しない場合に、再押下での再試行を安全に許すためのガード。
+  const startEpochRef = useRef(0);
+  const startAttemptAtRef = useRef(0);
   const recordingWindowPromiseRef = useRef<Promise<{ id: string; exe: string; title: string } | null> | null>(null);
   const cachedApiKeyRef = useRef("");
   const cachedFormatApiKeyRef = useRef("");
@@ -231,9 +239,17 @@ export default function Overlay() {
       return;
     }
     if (edge === "ignore") {
-      // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
-      logWarn("overlay.handleStart", "start ignored: recording already active");
-      return;
+      // phase=recording。session が確立済みなら本当に録音中なので無視。
+      // 一方 session 未確立のまま START_STALL_MS 超なら開始処理が停滞している。
+      // その場合だけ再押下での再試行を許す（下の epoch で停滞中の試行を無効化する）。
+      const stalled = !sessionRef.current
+        && Date.now() - startAttemptAtRef.current >= START_STALL_MS;
+      if (!stalled) {
+        // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
+        logWarn("overlay.handleStart", "start ignored: recording already active");
+        return;
+      }
+      logWarn("overlay.handleStart", "restarting stalled start attempt");
     }
 
     // onRecognitionError は error へ遷移させるがセッションは解放しない（phase 判定では拾えない）。
@@ -245,6 +261,11 @@ export default function Overlay() {
         logWarn("overlay.handleStart", "stale session cleanup failed", { error: e })
       );
     }
+
+    // この開始試行の世代印。以降の await で世代が進んでいたら（新たな start に追い越されたら）
+    // 途中で確保したリソースを解放して黙って降りる。
+    const epoch = ++startEpochRef.current;
+    startAttemptAtRef.current = Date.now();
 
     logInfo("overlay.handleStart", "start");
     dispatch({ type: "RECORDING_START" });
@@ -334,6 +355,14 @@ export default function Overlay() {
       ]);
       mediaStream = ms;
 
+      // 別の start に追い越されていたら、掴んだマイクを解放してこの試行は降りる
+      // （まだ session もミュートも触っていないのでストリーム停止だけでよい）。
+      if (startEpochRef.current !== epoch) {
+        logWarn("overlay.handleStart", "start superseded before session setup");
+        mediaStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       const session = new TranscriptionSession();
       sessionRef.current = session;
 
@@ -355,10 +384,32 @@ export default function Overlay() {
         // ここでの再ログはノイズになる。UI 更新だけ行う。
         onRecognitionError: (msg) => dispatch({ type: "RECORDING_FAILED", errorMsg: msg }),
       });
+
+      // session.start 中に追い越されていた場合の後始末。追い越した start が
+      // staleSession 経由でこの session を既に停止・差し替え済みなら sessionRef は別物なので触らない。
+      // ミュート状態は追い越した録音が所有するため解除しない。
+      if (startEpochRef.current !== epoch) {
+        logWarn("overlay.handleStart", "start superseded after session.start");
+        if (sessionRef.current === session) {
+          sessionRef.current = null;
+          void session.stop().catch((e: unknown) =>
+            logWarn("overlay.handleStart", "superseded session cleanup failed", { error: e })
+          );
+        }
+        return;
+      }
+
       logInfo("overlay.handleStart", "recording started", {
         provider: settings.transcriptionProvider,
       });
     } catch (e) {
+      // 追い越された試行の失敗は、新しい録音の状態（sessionRef/ミュート/phase）を壊さないよう
+      // 自分が掴んだ mediaStream だけ解放して黙って降りる。
+      if (startEpochRef.current !== epoch) {
+        logWarn("overlay.handleStart", "superseded start attempt failed", { error: e });
+        mediaStream?.getTracks().forEach((t) => t.stop());
+        return;
+      }
       // セッション作成済みならミュート解除。MediaStream が掴まれていれば確実に解放。
       if (sessionRef.current) {
         sessionRef.current = null;
