@@ -29,17 +29,18 @@ fn diag_log_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("freevoice.log"))
 }
 
-/// chrono 非依存で UTC の ISO8601（ミリ秒精度）を返す。
-/// 例: "2026-04-10T10:23:45.123Z"
+/// chrono 非依存で JST（UTC+9、DST なし固定オフセット）の ISO8601（ミリ秒精度）を返す。
+/// 例: "2026-04-10T19:23:45.123+09:00"
 fn format_iso8601_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
+    const JST_OFFSET_SECS: i64 = 9 * 3600;
     let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
+    let secs = dur.as_secs() as i64 + JST_OFFSET_SECS;
     let millis = dur.subsec_millis();
 
-    // Unix 秒 → 年月日時分秒（UTC、Gregorian）
+    // Unix 秒 → 年月日時分秒（JST、Gregorian）
     let days = secs.div_euclid(86_400);
     let time_of_day = secs.rem_euclid(86_400);
     let hour = (time_of_day / 3600) as u32;
@@ -60,7 +61,7 @@ fn format_iso8601_now() -> String {
     let y = (y + if m <= 2 { 1 } else { 0 }) as i32;
 
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}+09:00",
         y, m, d, hour, minute, second, millis
     )
 }
