@@ -73,6 +73,7 @@ fn write_diag_log_internal(
     level: &str,
     source: &str,
     message: &str,
+    phase: Option<&str>,
     context: Option<&str>,
 ) -> Result<(), String> {
     let state = app.state::<DiagLogState>();
@@ -95,9 +96,13 @@ fn write_diag_log_internal(
     }
 
     let ts = format_iso8601_now();
+    // phase は録音制御 status。設定ウィンドウ等では None だが、[phase] [source] の
+    // ブラケット位置を固定するため "-" で埋める（省略すると [source] だけが残り、
+    // phase と source のどちらのブラケットか判別できなくなるため）。
+    let phase_prefix = format!("[{}] ", phase.unwrap_or("-"));
     let line = match context {
-        Some(ctx) => format!("{} {} [{}] {} | {}\n", ts, level, source, message, ctx),
-        None => format!("{} {} [{}] {}\n", ts, level, source, message),
+        Some(ctx) => format!("{} {} {}[{}] {} | {}\n", ts, level, phase_prefix, source, message, ctx),
+        None => format!("{} {} {}[{}] {}\n", ts, level, phase_prefix, source, message),
     };
 
     use std::io::Write;
@@ -115,14 +120,15 @@ fn append_diag_log(
     level: String,
     source: String,
     message: String,
+    phase: Option<String>,
     context: Option<String>,
 ) -> Result<(), String> {
-    write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
+    write_diag_log_internal(&app, &level, &source, &message, phase.as_deref(), context.as_deref())
 }
 
 /// Rust 内部用のログヘルパ。`write_diag_log_internal` の失敗は診断情報なので握り潰す。
 fn diag_log(app: &AppHandle, level: &str, source: &str, message: &str) {
-    let _ = write_diag_log_internal(app, level, source, message, None);
+    let _ = write_diag_log_internal(app, level, source, message, None, None);
 }
 
 /// エラー情報付きで診断ログを記録する。`err` の文字列を JSON 風の `{"error":"..."}` に整形。
@@ -134,7 +140,7 @@ fn diag_log_err(
     err: impl std::fmt::Display,
 ) {
     let ctx = format!("{{\"error\":{:?}}}", err.to_string());
-    let _ = write_diag_log_internal(app, level, source, message, Some(&ctx));
+    let _ = write_diag_log_internal(app, level, source, message, None, Some(&ctx));
 }
 
 /// WebView の fetch() は LangSmith の OTLP エンドポイントの CORS で阻まれる

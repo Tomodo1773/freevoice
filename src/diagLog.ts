@@ -21,15 +21,14 @@ export function setLogPhaseSource(source: () => string): void {
 /** Rust 側の append_diag_log コマンドに 1 行追記する。
  *  診断ログ自体が失敗しても本流を止めないため、fire-and-forget で使う。 */
 function write(level: Level, source: string, message: string, context?: LogContext): void {
-  const phase = phaseSource?.();
-  const merged = phase !== undefined ? { phase, ...context } : context;
-  const normalized = merged
-    ? { ...merged, ...("error" in merged ? { error: formatError(merged.error) } : {}) }
+  const normalized = context
+    ? { ...context, ...("error" in context ? { error: formatError(context.error) } : {}) }
     : undefined;
   invoke("append_diag_log", {
     level,
     source,
     message,
+    phase: phaseSource?.() ?? null,
     context: normalized ? JSON.stringify(normalized) : null,
   }).catch((e) => {
     // 診断ログ自体が失敗した場合は console に fallback（最後の手段）
