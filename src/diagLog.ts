@@ -8,6 +8,16 @@ type Level = "INFO" | "WARN" | "ERROR";
  *  送信時に `formatError` で文字列化される。 */
 type LogContext = Record<string, unknown> & { error?: unknown };
 
+/** 現在の録音制御 status を返す関数。overlay ウィンドウのみ登録し、
+ *  以降すべてのログ行に自動で `phase` フィールドが乗る。 */
+let phaseSource: (() => string) | null = null;
+
+/** overlay ウィンドウ起動時に一度だけ呼ぶ。設定ウィンドウ等では呼ばれないため
+ *  phase フィールドは付与されない。 */
+export function setLogPhaseSource(source: () => string): void {
+  phaseSource = source;
+}
+
 /** Rust 側の append_diag_log コマンドに 1 行追記する。
  *  診断ログ自体が失敗しても本流を止めないため、fire-and-forget で使う。 */
 function write(level: Level, source: string, message: string, context?: LogContext): void {
@@ -18,6 +28,7 @@ function write(level: Level, source: string, message: string, context?: LogConte
     level,
     source,
     message,
+    phase: phaseSource?.() ?? null,
     context: normalized ? JSON.stringify(normalized) : null,
   }).catch((e) => {
     // 診断ログ自体が失敗した場合は console に fallback（最後の手段）

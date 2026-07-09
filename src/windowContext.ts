@@ -146,7 +146,7 @@ export async function refreshContext(
     try {
       result = await distillTopic(prev, formatted, config);
       updateContext(id, exe, title, result.summary);
-      logInfo("windowContext", "topic distilled", { id, exe, summary: result.summary });
+      logInfo("windowContext", "topic distilled", { id, exe, summaryLength: result.summary.length });
     } catch (e) {
       distillError = e instanceof PostprocessError
         ? { message: e.message, status: e.status }

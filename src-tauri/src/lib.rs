@@ -29,17 +29,18 @@ fn diag_log_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("freevoice.log"))
 }
 
-/// chrono 非依存で UTC の ISO8601（ミリ秒精度）を返す。
-/// 例: "2026-04-10T10:23:45.123Z"
+/// chrono 非依存で JST（UTC+9、DST なし固定オフセット）の ISO8601（ミリ秒精度）を返す。
+/// 例: "2026-04-10T19:23:45.123+09:00"
 fn format_iso8601_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
+    const JST_OFFSET_SECS: i64 = 9 * 3600;
     let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
+    let secs = dur.as_secs() as i64 + JST_OFFSET_SECS;
     let millis = dur.subsec_millis();
 
-    // Unix 秒 → 年月日時分秒（UTC、Gregorian）
+    // Unix 秒 → 年月日時分秒（JST、Gregorian）
     let days = secs.div_euclid(86_400);
     let time_of_day = secs.rem_euclid(86_400);
     let hour = (time_of_day / 3600) as u32;
@@ -60,7 +61,7 @@ fn format_iso8601_now() -> String {
     let y = (y + if m <= 2 { 1 } else { 0 }) as i32;
 
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}+09:00",
         y, m, d, hour, minute, second, millis
     )
 }
@@ -72,6 +73,7 @@ fn write_diag_log_internal(
     level: &str,
     source: &str,
     message: &str,
+    phase: Option<&str>,
     context: Option<&str>,
 ) -> Result<(), String> {
     let state = app.state::<DiagLogState>();
@@ -94,9 +96,13 @@ fn write_diag_log_internal(
     }
 
     let ts = format_iso8601_now();
+    // phase は録音制御 status。設定ウィンドウ等では None だが、[phase] [source] の
+    // ブラケット位置を固定するため "-" で埋める（省略すると [source] だけが残り、
+    // phase と source のどちらのブラケットか判別できなくなるため）。
+    let phase_prefix = format!("[{}] ", phase.unwrap_or("-"));
     let line = match context {
-        Some(ctx) => format!("{} {} [{}] {} | {}\n", ts, level, source, message, ctx),
-        None => format!("{} {} [{}] {}\n", ts, level, source, message),
+        Some(ctx) => format!("{} {} {}[{}] {} | {}\n", ts, level, phase_prefix, source, message, ctx),
+        None => format!("{} {} {}[{}] {}\n", ts, level, phase_prefix, source, message),
     };
 
     use std::io::Write;
@@ -114,14 +120,15 @@ fn append_diag_log(
     level: String,
     source: String,
     message: String,
+    phase: Option<String>,
     context: Option<String>,
 ) -> Result<(), String> {
-    write_diag_log_internal(&app, &level, &source, &message, context.as_deref())
+    write_diag_log_internal(&app, &level, &source, &message, phase.as_deref(), context.as_deref())
 }
 
 /// Rust 内部用のログヘルパ。`write_diag_log_internal` の失敗は診断情報なので握り潰す。
 fn diag_log(app: &AppHandle, level: &str, source: &str, message: &str) {
-    let _ = write_diag_log_internal(app, level, source, message, None);
+    let _ = write_diag_log_internal(app, level, source, message, None, None);
 }
 
 /// エラー情報付きで診断ログを記録する。`err` の文字列を JSON 風の `{"error":"..."}` に整形。
@@ -133,7 +140,7 @@ fn diag_log_err(
     err: impl std::fmt::Display,
 ) {
     let ctx = format!("{{\"error\":{:?}}}", err.to_string());
-    let _ = write_diag_log_internal(app, level, source, message, Some(&ctx));
+    let _ = write_diag_log_internal(app, level, source, message, None, Some(&ctx));
 }
 
 /// WebView の fetch() は LangSmith の OTLP エンドポイントの CORS で阻まれる

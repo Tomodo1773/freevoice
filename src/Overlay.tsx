@@ -10,7 +10,7 @@ import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { createOverlayStore, decideStartEdge, decideStopEdge } from "./overlayReducer";
 import { formatError } from "./errors";
-import { logInfo, logWarn, logError } from "./diagLog";
+import { logInfo, logWarn, logError, setLogPhaseSource } from "./diagLog";
 import type { AppSettings } from "./types";
 
 function playStartBeep(): void {
@@ -118,7 +118,10 @@ export default function Overlay() {
   // 制御 status の単一ストア。UI は購読して描画し、イベントハンドラは store.getState() で
   // 最新 status を同期読み取りする（sessionRef/abortRef は状態判定に使わず実行リソースに降格）。
   const storeRef = useRef<ReturnType<typeof createOverlayStore> | null>(null);
-  if (storeRef.current === null) storeRef.current = createOverlayStore();
+  if (storeRef.current === null) {
+    storeRef.current = createOverlayStore();
+    setLogPhaseSource(() => storeRef.current!.getState().phase);
+  }
   const store = storeRef.current;
   const state = useSyncExternalStore(store.subscribe, store.getState);
   const dispatch = store.dispatch;
@@ -449,7 +452,6 @@ export default function Overlay() {
     if (!session) {
       // キーを離したのに何も起きない事象を追えるよう、無視した stop も記録する。
       logInfo("overlay.handleStop", "stop ignored: no active session", {
-        phase: store.getState().phase,
         processing: abortRef.current !== null,
       });
       return;
@@ -464,7 +466,7 @@ export default function Overlay() {
     // 文字起こし/整形パイプラインを回さずリソース解放だけ行う。
     const phaseAtStop = store.getState().phase;
     if (decideStopEdge(phaseAtStop) !== "stop") {
-      logInfo("overlay.handleStop", "release without pipeline", { phase: phaseAtStop });
+      logInfo("overlay.handleStop", "release without pipeline");
       await session.stop().catch((e: unknown) =>
         logWarn("overlay.handleStop", "cleanup stop failed", { error: e })
       );
