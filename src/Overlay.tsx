@@ -11,6 +11,49 @@ import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
 import { createOverlayStore, decideStartEdge, decideStopEdge } from "./overlayReducer";
 import { formatError } from "./errors";
 import { logInfo, logWarn, logError } from "./diagLog";
+import type { AppSettings } from "./types";
+
+function playStartBeep(): void {
+  const ctx = new AudioContext();
+  const oscillator = ctx.createOscillator();
+  const gainNode = ctx.createGain();
+  oscillator.connect(gainNode);
+  gainNode.connect(ctx.destination);
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+  gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+  oscillator.start(ctx.currentTime);
+  oscillator.stop(ctx.currentTime + 0.08);
+  oscillator.onended = () => ctx.close();
+}
+
+// 失効したデバイスIDで getUserMedia すると WebView2 で hang するため、事前検証して自己治癒する
+async function validateAudioDevice(
+  settings: AppSettings
+): Promise<{ effectiveDeviceId: string; settings: AppSettings }> {
+  const { audioDeviceId } = settings;
+  if (!audioDeviceId) return { effectiveDeviceId: "", settings };
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const exists = devices.some((d) => d.kind === "audioinput" && d.deviceId === audioDeviceId);
+  if (exists) return { effectiveDeviceId: audioDeviceId, settings };
+
+  logWarn("overlay.validateAudioDevice", "saved audioDeviceId not found, falling back to default", {
+    audioDeviceId,
+  });
+  const updated = { ...settings, audioDeviceId: "" };
+  persistSettings(updated);
+  return { effectiveDeviceId: "", settings: updated };
+}
+
+async function loadCachedConfig() {
+  const settings = loadSettings();
+  const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
+  const formatApiKey = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
+  warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
+  return { settings, apiKey, formatApiKey, langsmithApiKey };
+}
 
 /** 開始処理がこの時間内に session を確立できなければ「停滞」とみなし、再押下での再試行を許す。
  *  通常のマイク初期化（100-300ms）や短い権限応答では発火せず、真に hang した場合のみ復帰させる。 */
@@ -272,20 +315,8 @@ export default function Overlay() {
     recordingWindowPromiseRef.current = null;
 
     const now = new Date();
-    // 録音開始音。失敗しても録音本体は続行するため、握り潰さず記録だけする。
     try {
-      const ctx = new AudioContext();
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
-      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.08);
-      oscillator.onended = () => ctx.close();
+      playStartBeep();
     } catch (e) {
       logWarn("overlay.handleStart", "start beep failed", { error: e });
     }
@@ -293,14 +324,12 @@ export default function Overlay() {
     let mediaStream: MediaStream | null = null;
     let settings = cachedSettingsRef.current;
     try {
-      settings = loadSettings();
-      const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
+      const config = await loadCachedConfig();
+      settings = config.settings;
       cachedSettingsRef.current = settings;
-      cachedApiKeyRef.current = apiKey;
-      cachedFormatApiKeyRef.current = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
-      cachedLangsmithApiKeyRef.current = langsmithApiKey;
-      // 整形APIへの接続を録音中に温めておく（TLSハンドシェイクをクリティカルパスから外す）
-      warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
+      cachedApiKeyRef.current = config.apiKey;
+      cachedFormatApiKeyRef.current = config.formatApiKey;
+      cachedLangsmithApiKeyRef.current = config.langsmithApiKey;
 
       // 文脈スコープ用にフォアグラウンドウィンドウを取得。await せず録音中に解決させ、
       // overlay show + getUserMedia の並列化（クリティカルパス）を阻害しない。
@@ -317,22 +346,10 @@ export default function Overlay() {
       setSilentWarn(false);
       silentSinceRef.current = null;
 
-      // 保存済み audioDeviceId が現在のデバイス一覧に存在するか検証。
-      // 失効していると getUserMedia が WebView2 で hang するため、空に戻して localStorage を自己治癒する。
-      let effectiveDeviceId = settings.audioDeviceId;
-      if (effectiveDeviceId) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const exists = devices.some((d) => d.kind === "audioinput" && d.deviceId === effectiveDeviceId);
-        if (!exists) {
-          logWarn("overlay.handleStart", "saved audioDeviceId not found, falling back to default", {
-            audioDeviceId: effectiveDeviceId,
-          });
-          effectiveDeviceId = "";
-          settings = { ...settings, audioDeviceId: "" };
-          persistSettings(settings);
-          cachedSettingsRef.current = settings;
-        }
-      }
+      const validated = await validateAudioDevice(settings);
+      const effectiveDeviceId = validated.effectiveDeviceId;
+      settings = validated.settings;
+      cachedSettingsRef.current = settings;
 
       const appWindow = getCurrentWebviewWindow();
 
@@ -373,7 +390,7 @@ export default function Overlay() {
       await session.start({
         provider: settings.transcriptionProvider,
         endpoint: settings.endpoint,
-        apiKey,
+        apiKey: cachedApiKeyRef.current,
         model: settings.transcriptionModel,
         speechEndpoint: settings.speechEndpoint,
         speechLanguage: settings.speechLanguage,
