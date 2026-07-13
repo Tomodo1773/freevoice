@@ -1,5 +1,7 @@
 export type OverlayPhase =
   | "idle"
+  | "starting"
+  | "stop-pending"
   | "recording"
   | "transcribing"
   | "formatting"
@@ -21,6 +23,8 @@ export interface OverlayState {
 
 export type OverlayAction =
   | { type: "RECORDING_START" }
+  | { type: "RECORDING_READY" }
+  | { type: "RECORDING_STOP_REQUESTED" }
   | { type: "RECORDING_FAILED"; errorMsg: string }
   | { type: "STOP_TRANSCRIBING" }
   | { type: "TRANSCRIPT_EMPTY"; silent: boolean }
@@ -52,15 +56,32 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
       // 開始可否のガードは decideStartEdge に一本化（ハンドラの分岐と同一の唯一の定義）。
       // fading は終端 phase(done/error/nospeech)に必ず伴うため phase だけで判定できる。
       if (decideStartEdge(state.phase) !== "start") return state;
-      return { ...initialState, phase: "recording" };
+      return { ...initialState, phase: "starting" };
     }
 
+    case "RECORDING_READY":
+      if (state.phase !== "starting" && state.phase !== "stop-pending") return state;
+      return { ...state, phase: "recording" };
+
+    case "RECORDING_STOP_REQUESTED":
+      if (state.phase === "stop-pending") return state;
+      if (state.phase !== "starting") return state;
+      return { ...state, phase: "stop-pending" };
+
     case "SET_TRANSCRIPT":
-      if (state.phase !== "recording") return state;
+      if (
+        state.phase !== "starting" &&
+        state.phase !== "stop-pending" &&
+        state.phase !== "recording"
+      ) return state;
       return { ...state, transcript: action.transcript };
 
     case "RECORDING_FAILED":
-      if (state.phase !== "recording") return state;
+      if (
+        state.phase !== "starting" &&
+        state.phase !== "stop-pending" &&
+        state.phase !== "recording"
+      ) return state;
       return {
         ...state,
         phase: "error",
@@ -132,13 +153,23 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
 export type StartEdge = "start" | "cancel" | "ignore";
 
 export function decideStartEdge(phase: OverlayPhase): StartEdge {
-  if (phase === "recording") return "ignore"; // 既に録音中
+  if (phase === "starting" || phase === "stop-pending" || phase === "recording") {
+    return "ignore"; // 録音の開始処理中、停止予約済み、または録音中
+  }
   if (phase === "transcribing" || phase === "formatting") return "cancel"; // 処理中の再押下＝キャンセル
   return "start"; // idle / done / error / nospeech — 次の録音を開始
 }
 
-/** キーエッジ（recording-stop）の意味。録音中のみ停止し、それ以外は無視する。 */
-export function decideStopEdge(phase: OverlayPhase): "stop" | "ignore" {
+/** 非同期の録音開始が完了した時点で、録音継続・即時停止・破棄のどれを行うか決める。 */
+export function decideReadyEdge(phase: OverlayPhase): "record" | "stop" | "discard" {
+  if (phase === "starting") return "record";
+  if (phase === "stop-pending") return "stop";
+  return "discard";
+}
+
+/** キーエッジ（recording-stop）の意味。開始中なら停止意思を保持し、録音中なら停止する。 */
+export function decideStopEdge(phase: OverlayPhase): "request" | "stop" | "ignore" {
+  if (phase === "starting" || phase === "stop-pending") return "request";
   return phase === "recording" ? "stop" : "ignore";
 }
 
