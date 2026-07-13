@@ -23,6 +23,7 @@ export interface OverlayState {
 
 export type OverlayAction =
   | { type: "RECORDING_START" }
+  | { type: "RECORDING_RESTART" }
   | { type: "RECORDING_READY" }
   | { type: "RECORDING_STOP_REQUESTED" }
   | { type: "RECORDING_FAILED"; errorMsg: string }
@@ -58,6 +59,10 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
       if (decideStartEdge(state.phase) !== "start") return state;
       return { ...initialState, phase: "starting" };
     }
+
+    case "RECORDING_RESTART":
+      if (state.phase !== "starting" && state.phase !== "stop-pending") return state;
+      return { ...initialState, phase: "starting" };
 
     case "RECORDING_READY":
       if (state.phase !== "starting" && state.phase !== "stop-pending") return state;

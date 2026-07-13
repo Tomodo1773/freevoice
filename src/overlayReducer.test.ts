@@ -77,6 +77,17 @@ describe("overlayReducer", () => {
       expect(duplicate).toBe(pending);
     });
 
+    it("stop-pending中のストール再試行は停止予約を捨ててstartingへ戻す", () => {
+      const pending = applyActions(initialState, [
+        { type: "RECORDING_START" },
+        { type: "RECORDING_STOP_REQUESTED" },
+      ]);
+
+      const restarted = overlayReducer(pending, { type: "RECORDING_RESTART" });
+      expect(restarted).toEqual({ ...initialState, phase: "starting" });
+      expect(decideReadyEdge(restarted.phase)).toBe("record");
+    });
+
     it("開始完了時は停止予約の有無から継続か即時停止かを一意に決める", () => {
       expect(decideReadyEdge("starting")).toBe("record");
       expect(decideReadyEdge("stop-pending")).toBe("stop");

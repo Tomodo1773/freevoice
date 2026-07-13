@@ -279,6 +279,7 @@ export default function Overlay() {
     // 最初の await より前に同期的に評価する。
     const phaseAtStart = store.getState().phase;
     const edge = decideStartEdge(phaseAtStart);
+    let restartingStalledAttempt = false;
     if (edge === "cancel") {
       // 処理中（transcribing/formatting）の再押下＝キャンセル。abortRef は status に従属する実行リソース。
       logInfo("overlay.handleStart", "cancel requested: aborting in-flight processing");
@@ -286,10 +287,10 @@ export default function Overlay() {
       return;
     }
     if (edge === "ignore") {
-      // phase=starting/recording。session が確立済みなら開始中または録音中なので無視。
+      // phase=starting/stop-pending/recording。session が確立済みなら開始中または録音中なので無視。
       // 一方 session 未確立のまま START_STALL_MS 超なら開始処理が停滞している。
       // その場合だけ再押下での再試行を許す（下の epoch で停滞中の試行を無効化する）。
-      const stalled = phaseAtStart === "starting"
+      const stalled = (phaseAtStart === "starting" || phaseAtStart === "stop-pending")
         && !sessionRef.current
         && Date.now() - startAttemptAtRef.current >= START_STALL_MS;
       if (!stalled) {
@@ -298,6 +299,7 @@ export default function Overlay() {
         return;
       }
       logWarn("overlay.handleStart", "restarting stalled start attempt");
+      restartingStalledAttempt = true;
     }
 
     // onRecognitionError は error へ遷移させるがセッションは解放しない（phase 判定では拾えない）。
@@ -316,7 +318,7 @@ export default function Overlay() {
     startAttemptAtRef.current = Date.now();
 
     logInfo("overlay.handleStart", "start");
-    dispatch({ type: "RECORDING_START" });
+    dispatch({ type: restartingStalledAttempt ? "RECORDING_RESTART" : "RECORDING_START" });
     recordingWindowPromiseRef.current = null;
 
     const now = new Date();
@@ -443,12 +445,7 @@ export default function Overlay() {
         logWarn("overlay.handleStart", "session ready after recording became inactive", {
           phase: phaseAfterStart,
         });
-        if (sessionRef.current === session) {
-          sessionRef.current = null;
-          void session.stop().catch((e: unknown) =>
-            logWarn("overlay.handleStart", "inactive session cleanup failed", { error: e })
-          );
-        }
+        await handleStop();
         return;
       }
 
