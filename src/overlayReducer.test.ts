@@ -1,332 +1,225 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  overlayReducer,
+  createOverlayStore,
   initialState,
-  decideStartEdge,
-  decideStopEdge,
-  OverlayState,
-  OverlayAction,
+  overlayReducer,
+  type OverlayAction,
+  type OverlayState,
 } from "./overlayReducer";
 
-/** reducer を連続適用するヘルパー */
 function applyActions(state: OverlayState, actions: OverlayAction[]): OverlayState {
   return actions.reduce(overlayReducer, state);
 }
 
+const start = (attemptId = 1, stopRequested = false): OverlayAction => ({
+  type: "CAPTURE_STATE",
+  status: "starting",
+  attemptId,
+  mode: "hold",
+  stopRequested,
+  interim: "",
+});
+
+const ready = (attemptId = 1, interim = ""): OverlayAction => ({
+  type: "CAPTURE_STATE",
+  status: "recording",
+  attemptId,
+  mode: "hold",
+  stopRequested: false,
+  interim,
+});
+
+const stopping = (attemptId = 1, interim = ""): OverlayAction => ({
+  type: "CAPTURE_STATE",
+  status: "stopping",
+  attemptId,
+  mode: "hold",
+  stopRequested: false,
+  interim,
+});
+
 describe("overlayReducer", () => {
-  describe("正常フロー", () => {
-    it("idle → recording → transcribing → formatting → done", () => {
-      const s1 = overlayReducer(initialState, { type: "RECORDING_START" });
-      expect(s1.phase).toBe("recording");
-      expect(s1.hideRequest).toBeNull();
+  it("録音から整形完了までの表示状態を反映する", () => {
+    const states = [
+      overlayReducer(initialState, start()),
+    ];
+    states.push(overlayReducer(states[states.length - 1], ready(1, "途中")));
+    states.push(overlayReducer(states[states.length - 1], stopping(1, "確定前")));
+    states.push(overlayReducer(states[states.length - 1], {
+      type: "TRANSCRIPT_READY",
+      transcript: "こんにちは",
+    }));
+    states.push(overlayReducer(states[states.length - 1], { type: "FORMAT_DONE" }));
 
-      const s2 = overlayReducer(s1, { type: "STOP_TRANSCRIBING" });
-      expect(s2.phase).toBe("transcribing");
+    expect(states.map((state) => state.phase)).toEqual([
+      "starting",
+      "recording",
+      "transcribing",
+      "formatting",
+      "done",
+    ]);
+    expect(states[states.length - 1].hideRequest?.ms).toBe(1000);
+  });
 
-      const s3 = overlayReducer(s2, { type: "TRANSCRIPT_READY", transcript: "こんにちは" });
-      expect(s3.phase).toBe("formatting");
-      expect(s3.transcript).toBe("こんにちは");
+  it("starting中の停止予約を表示状態へ反映する", () => {
+    const starting = overlayReducer(initialState, start());
+    const pending = overlayReducer(starting, start(1, true));
+    expect(pending.phase).toBe("starting");
+    expect(pending.stopRequested).toBe(true);
+  });
 
-      const s4 = overlayReducer(s3, { type: "FORMAT_DONE" });
-      expect(s4.phase).toBe("done");
-      expect(s4.hideRequest).not.toBeNull();
-      expect(s4.hideRequest!.ms).toBe(1000);
+  it("toggleモードはattempt単位で保持する", () => {
+    const state = overlayReducer(initialState, {
+      type: "CAPTURE_STATE",
+      status: "starting",
+      attemptId: 4,
+      mode: "toggle",
+      stopRequested: false,
+      interim: "",
     });
+    expect(state.captureAttemptId).toBe(4);
+    expect(state.captureMode).toBe("toggle");
+  });
 
-    it("done → BEGIN_FADE → FADE_DONE → idle", () => {
-      const done = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-        { type: "FORMAT_DONE" },
-      ]);
-
-      const fading = overlayReducer(done, { type: "BEGIN_FADE" });
-      expect(fading.fading).toBe(true);
-      expect(fading.hideRequest).toBeNull();
-
-      const idle = overlayReducer(fading, { type: "FADE_DONE" });
-      expect(idle).toEqual(initialState);
+  it("新しいattemptは古い完了表示と非表示予約をリセットする", () => {
+    const done = applyActions(initialState, [
+      start(),
+      ready(),
+      stopping(),
+      { type: "TRANSCRIPT_READY", transcript: "test" },
+      { type: "FORMAT_DONE", fallback: true, fallbackReason: "format error" },
+    ]);
+    const next = overlayReducer(done, start(2));
+    expect(next).toMatchObject({
+      phase: "starting",
+      captureAttemptId: 2,
+      transcript: "",
+      fallback: false,
+      fading: false,
+      hideRequest: null,
     });
   });
 
-  describe("連続録音（今回のバグの根本原因）", () => {
-    it("done（hideRequest有）→ RECORDING_START → recording（hideRequest=null）", () => {
-      const done = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-        { type: "FORMAT_DONE" },
-      ]);
-      expect(done.hideRequest).not.toBeNull();
-
-      // BEGIN_FADE が来る前に次の録音開始 → done から直接 recording へ
-      const recording = overlayReducer(done, { type: "RECORDING_START" });
-      expect(recording.phase).toBe("recording");
-      expect(recording.hideRequest).toBeNull();
-      expect(recording.transcript).toBe("");
-    });
-
-    it("error → RECORDING_START → recording", () => {
-      const error = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "RECORDING_FAILED", errorMsg: "マイクエラー" },
-      ]);
-      expect(error.phase).toBe("error");
-
-      const recording = overlayReducer(error, { type: "RECORDING_START" });
-      expect(recording.phase).toBe("recording");
-      expect(recording.hideRequest).toBeNull();
-      expect(recording.errorMsg).toBe("");
-    });
-
-    it("transcribing → RECORDING_START は拒否", () => {
-      const transcribing = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-      ]);
-      const result = overlayReducer(transcribing, { type: "RECORDING_START" });
-      expect(result.phase).toBe("transcribing");
-    });
-
-    it("formatting → RECORDING_START は拒否", () => {
-      const formatting = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-      ]);
-      const result = overlayReducer(formatting, { type: "RECORDING_START" });
-      expect(result.phase).toBe("formatting");
-    });
-
-    it("fading 中の再録音が正しく動く", () => {
-      const fading = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-        { type: "FORMAT_DONE" },
-        { type: "BEGIN_FADE" },
-      ]);
-      expect(fading.fading).toBe(true);
-
-      const recording = overlayReducer(fading, { type: "RECORDING_START" });
-      expect(recording.phase).toBe("recording");
-      expect(recording.fading).toBe(false);
-      expect(recording.hideRequest).toBeNull();
-      expect(recording.transcript).toBe("");
-    });
+  it("古いattemptのrecording/stopping通知を無視する", () => {
+    const current = overlayReducer(initialState, start(2));
+    expect(overlayReducer(current, ready(1))).toEqual(current);
+    expect(overlayReducer(current, stopping(1))).toEqual(current);
   });
 
-  describe("空結果", () => {
-    it("無音の場合: transcribing → nospeech + 1500ms hide", () => {
-      const transcribing = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-      ]);
-
-      const result = overlayReducer(transcribing, { type: "TRANSCRIPT_EMPTY", silent: true });
-      expect(result.phase).toBe("nospeech");
-      expect(result.transcript).toBe("音声が検出されませんでした");
-      expect(result.hideRequest!.ms).toBe(1500);
+  it("認識エラーはcapture情報を消してerror表示にする", () => {
+    const recording = applyActions(initialState, [start(), ready()]);
+    const error = overlayReducer(recording, {
+      type: "CAPTURE_FAILED",
+      errorMsg: "音声認識が切断されました",
     });
-
-    it("非無音の空結果: transcribing → nospeech + 150ms hide（成功表示は出さない）", () => {
-      const transcribing = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-      ]);
-
-      const result = overlayReducer(transcribing, { type: "TRANSCRIPT_EMPTY", silent: false });
-      expect(result.phase).toBe("nospeech");
-      expect(result.transcript).toBe("音声が検出されませんでした");
-      expect(result.hideRequest!.ms).toBe(150);
+    expect(error).toMatchObject({
+      phase: "error",
+      captureAttemptId: null,
+      captureMode: null,
+      errorMsg: "音声認識が切断されました",
     });
-
-    it("nospeech（無音終端）→ RECORDING_START → recording（リトライできる）", () => {
-      const nospeech = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_EMPTY", silent: true },
-      ]);
-      expect(nospeech.phase).toBe("nospeech");
-
-      const recording = overlayReducer(nospeech, { type: "RECORDING_START" });
-      expect(recording.phase).toBe("recording");
-      expect(recording.hideRequest).toBeNull();
-      expect(recording.transcript).toBe("");
-    });
+    expect(error.hideRequest?.ms).toBe(5000);
   });
 
-  describe("エラーフロー", () => {
-    it("recording → RECORDING_FAILED → error + 5000ms hide", () => {
-      const recording = overlayReducer(initialState, { type: "RECORDING_START" });
-      const error = overlayReducer(recording, { type: "RECORDING_FAILED", errorMsg: "マイクエラー" });
-
-      expect(error.phase).toBe("error");
-      expect(error.errorMsg).toBe("マイクエラー");
-      expect(error.hideRequest!.ms).toBe(5000);
-    });
-
-    it("transcribing → STOP_ERROR → error + 5000ms hide", () => {
-      const transcribing = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-      ]);
-
-      const error = overlayReducer(transcribing, { type: "STOP_ERROR", errorMsg: "APIエラー" });
-      expect(error.phase).toBe("error");
-      expect(error.errorMsg).toBe("APIエラー");
-      expect(error.hideRequest!.ms).toBe(5000);
-    });
-
-    it("formatting → STOP_ERROR → error + 5000ms hide", () => {
-      const formatting = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-      ]);
-
-      const error = overlayReducer(formatting, { type: "STOP_ERROR", errorMsg: "後処理エラー" });
-      expect(error.phase).toBe("error");
-      expect(error.hideRequest!.ms).toBe(5000);
-    });
+  it("captureキャンセルはidleへ戻す", () => {
+    const starting = overlayReducer(initialState, start());
+    expect(overlayReducer(starting, { type: "CAPTURE_CANCELLED" })).toEqual(initialState);
   });
 
-  describe("abort", () => {
-    it("transcribing → ABORT_CANCELLED → idle", () => {
-      const transcribing = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-      ]);
-
-      const idle = overlayReducer(transcribing, { type: "ABORT_CANCELLED" });
-      expect(idle).toEqual(initialState);
+  it("無音結果はnospeechとして表示する", () => {
+    const transcribing = applyActions(initialState, [start(), ready(), stopping()]);
+    const silent = overlayReducer(transcribing, {
+      type: "TRANSCRIPT_EMPTY",
+      silent: true,
     });
-
-    it("formatting → ABORT_CANCELLED → idle", () => {
-      const formatting = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-      ]);
-
-      const idle = overlayReducer(formatting, { type: "ABORT_CANCELLED" });
-      expect(idle).toEqual(initialState);
-    });
+    expect(silent.phase).toBe("nospeech");
+    expect(silent.transcript).toBe("音声が検出されませんでした");
+    expect(silent.hideRequest?.ms).toBe(1500);
   });
 
-  describe("フォールバック", () => {
-    it("FORMAT_DONE + fallback: true → fallback=true, hideRequest.ms=3000", () => {
-      const formatting = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-      ]);
-
-      const done = overlayReducer(formatting, { type: "FORMAT_DONE", fallback: true });
-      expect(done.phase).toBe("done");
-      expect(done.fallback).toBe(true);
-      expect(done.hideRequest!.ms).toBe(3000);
+  it("非無音の空結果は短時間で閉じる", () => {
+    const transcribing = applyActions(initialState, [start(), ready(), stopping()]);
+    const empty = overlayReducer(transcribing, {
+      type: "TRANSCRIPT_EMPTY",
+      silent: false,
     });
-
-    it("FORMAT_DONE + fallbackなし → fallback=false, hideRequest.ms=1000", () => {
-      const formatting = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-      ]);
-
-      const done = overlayReducer(formatting, { type: "FORMAT_DONE" });
-      expect(done.phase).toBe("done");
-      expect(done.fallback).toBe(false);
-      expect(done.hideRequest!.ms).toBe(1000);
-    });
-
-    it("RECORDING_START で fallback がリセットされる", () => {
-      const done = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_READY", transcript: "test" },
-        { type: "FORMAT_DONE", fallback: true },
-      ]);
-      expect(done.fallback).toBe(true);
-
-      const recording = overlayReducer(done, { type: "RECORDING_START" });
-      expect(recording.phase).toBe("recording");
-      expect(recording.fallback).toBe(false);
-    });
+    expect(empty.hideRequest?.ms).toBe(150);
   });
 
-  describe("不正遷移の無視", () => {
-    it("idle → STOP_TRANSCRIBING は無視", () => {
-      const result = overlayReducer(initialState, { type: "STOP_TRANSCRIBING" });
-      expect(result).toEqual(initialState);
+  it("整形fallbackは理由を保持して3秒表示する", () => {
+    const formatting = applyActions(initialState, [
+      start(),
+      ready(),
+      stopping(),
+      { type: "TRANSCRIPT_READY", transcript: "raw" },
+    ]);
+    const done = overlayReducer(formatting, {
+      type: "FORMAT_DONE",
+      fallback: true,
+      fallbackReason: "timeout",
     });
-
-    it("idle → FORMAT_DONE は無視", () => {
-      const result = overlayReducer(initialState, { type: "FORMAT_DONE" });
-      expect(result).toEqual(initialState);
+    expect(done).toMatchObject({
+      phase: "done",
+      fallback: true,
+      fallbackReason: "timeout",
     });
-
-    it("recording → FORMAT_DONE は無視", () => {
-      const recording = overlayReducer(initialState, { type: "RECORDING_START" });
-      const result = overlayReducer(recording, { type: "FORMAT_DONE" });
-      expect(result).toEqual(recording);
-    });
-
-    it("idle で RECORDING_START 以外のアクションは無視", () => {
-      const result = overlayReducer(initialState, { type: "SET_TRANSCRIPT", transcript: "x" });
-      expect(result).toEqual(initialState);
-    });
+    expect(done.hideRequest?.ms).toBe(3000);
   });
 
-  describe("キーエッジ判定（ガード単一化）", () => {
-    it("decideStartEdge: idle/done/error/nospeech は start", () => {
-      expect(decideStartEdge("idle")).toBe("start");
-      expect(decideStartEdge("done")).toBe("start");
-      expect(decideStartEdge("error")).toBe("start");
-      expect(decideStartEdge("nospeech")).toBe("start");
+  it("postprocessの失敗とキャンセルを分ける", () => {
+    const transcribing = applyActions(initialState, [start(), ready(), stopping()]);
+    const error = overlayReducer(transcribing, {
+      type: "POSTPROCESS_ERROR",
+      errorMsg: "整形エラー",
     });
+    expect(error.phase).toBe("error");
 
-    it("decideStartEdge: recording は ignore", () => {
-      expect(decideStartEdge("recording")).toBe("ignore");
+    const cancelled = overlayReducer(transcribing, {
+      type: "POSTPROCESS_CANCELLED",
     });
-
-    it("decideStartEdge: transcribing/formatting は cancel", () => {
-      expect(decideStartEdge("transcribing")).toBe("cancel");
-      expect(decideStartEdge("formatting")).toBe("cancel");
-    });
-
-    it("decideStopEdge: recording のみ stop、それ以外は ignore", () => {
-      expect(decideStopEdge("recording")).toBe("stop");
-      expect(decideStopEdge("idle")).toBe("ignore");
-      expect(decideStopEdge("transcribing")).toBe("ignore");
-      expect(decideStopEdge("formatting")).toBe("ignore");
-      expect(decideStopEdge("done")).toBe("ignore");
-      expect(decideStopEdge("error")).toBe("ignore");
-      expect(decideStopEdge("nospeech")).toBe("ignore");
-    });
+    expect(cancelled).toEqual(initialState);
   });
 
-  describe("hideRequest の seq がインクリメントされる", () => {
-    it("通常フローの hideRequest は seq=1", () => {
-      const s1 = applyActions(initialState, [
-        { type: "RECORDING_START" },
-        { type: "STOP_TRANSCRIBING" },
-        { type: "TRANSCRIPT_EMPTY", silent: true },
-      ]);
-      expect(s1.hideRequest!.seq).toBe(1);
-    });
+  it("無効な処理遷移を拒否する", () => {
+    expect(
+      overlayReducer(initialState, { type: "TRANSCRIPT_READY", transcript: "x" }),
+    ).toEqual(initialState);
+    expect(overlayReducer(initialState, { type: "FORMAT_DONE" })).toEqual(initialState);
+    expect(
+      overlayReducer(initialState, { type: "POSTPROCESS_ERROR", errorMsg: "x" }),
+    ).toEqual(initialState);
+  });
 
-    it("既存の hideRequest を持つ状態からの新たな hideRequest は seq を +1 する", () => {
-      // seq は「非表示予約の世代」。前回の予約が残る状態から新たな予約が入ると加算される。
-      const base: OverlayState = {
-        ...initialState,
-        phase: "recording",
-        hideRequest: { ms: 100, seq: 1 },
-      };
-      const failed = overlayReducer(base, { type: "RECORDING_FAILED", errorMsg: "err" });
-      expect(failed.hideRequest!.seq).toBe(2);
-    });
+  it("hideRequestを世代管理してfade後にidleへ戻す", () => {
+    const nospeech = applyActions(initialState, [
+      start(),
+      ready(),
+      stopping(),
+      { type: "TRANSCRIPT_EMPTY", silent: true },
+    ]);
+    const fading = overlayReducer(nospeech, { type: "BEGIN_FADE" });
+    expect(fading.fading).toBe(true);
+    expect(fading.hideRequest).toBeNull();
+    expect(overlayReducer(fading, { type: "FADE_DONE" })).toEqual(initialState);
+  });
+});
+
+describe("createOverlayStore", () => {
+  it("dispatch直後に同期的に最新の表示状態を返す", () => {
+    const store = createOverlayStore();
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+
+    store.dispatch(start());
+    expect(store.getState().phase).toBe("starting");
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    store.dispatch(ready());
+    expect(store.getState().phase).toBe("recording");
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    store.dispatch(stopping());
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

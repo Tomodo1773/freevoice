@@ -1,39 +1,54 @@
+import type { RecordingMode } from "./recordingController";
+
 export type OverlayPhase =
   | "idle"
+  | "starting"
   | "recording"
   | "transcribing"
   | "formatting"
   | "done"
   | "error"
-  /** 無音で終了した終端表示。制御上は idle/done と同じく「次の録音を開始できる」状態。 */
+  /** 無音で終了した終端表示。制御上は次の録音を開始できる。 */
   | "nospeech";
 
 export interface OverlayState {
   phase: OverlayPhase;
+  captureAttemptId: number | null;
+  captureMode: RecordingMode | null;
+  stopRequested: boolean;
   transcript: string;
   errorMsg: string;
   fallback: boolean;
   fallbackReason: string;
   fading: boolean;
-  /** 非表示予約。seq で世代管理し、useEffect のクリーンアップでタイマーを自動キャンセル */
+  /** 非表示予約。seq で世代管理し、useEffectのcleanupでタイマーを取り消す。 */
   hideRequest: { ms: number; seq: number } | null;
 }
 
 export type OverlayAction =
-  | { type: "RECORDING_START" }
-  | { type: "RECORDING_FAILED"; errorMsg: string }
-  | { type: "STOP_TRANSCRIBING" }
+  | {
+      type: "CAPTURE_STATE";
+      status: "starting" | "recording" | "stopping";
+      attemptId: number;
+      mode: RecordingMode;
+      stopRequested: boolean;
+      interim: string;
+    }
+  | { type: "CAPTURE_FAILED"; errorMsg: string }
+  | { type: "CAPTURE_CANCELLED" }
   | { type: "TRANSCRIPT_EMPTY"; silent: boolean }
   | { type: "TRANSCRIPT_READY"; transcript: string }
   | { type: "FORMAT_DONE"; fallback?: boolean; fallbackReason?: string }
-  | { type: "STOP_ERROR"; errorMsg: string }
-  | { type: "ABORT_CANCELLED" }
-  | { type: "SET_TRANSCRIPT"; transcript: string }
+  | { type: "POSTPROCESS_ERROR"; errorMsg: string }
+  | { type: "POSTPROCESS_CANCELLED" }
   | { type: "BEGIN_FADE" }
   | { type: "FADE_DONE" };
 
 export const initialState: OverlayState = {
   phase: "idle",
+  captureAttemptId: null,
+  captureMode: null,
+  stopRequested: false,
   transcript: "",
   errorMsg: "",
   fallback: false,
@@ -48,34 +63,58 @@ function nextSeq(state: OverlayState): number {
 
 export function overlayReducer(state: OverlayState, action: OverlayAction): OverlayState {
   switch (action.type) {
-    case "RECORDING_START": {
-      // 開始可否のガードは decideStartEdge に一本化（ハンドラの分岐と同一の唯一の定義）。
-      // fading は終端 phase(done/error/nospeech)に必ず伴うため phase だけで判定できる。
-      if (decideStartEdge(state.phase) !== "start") return state;
-      return { ...initialState, phase: "recording" };
+    case "CAPTURE_STATE": {
+      if (action.status === "starting") {
+        const base = state.captureAttemptId === action.attemptId ? state : initialState;
+        return {
+          ...base,
+          phase: "starting",
+          captureAttemptId: action.attemptId,
+          captureMode: action.mode,
+          stopRequested: action.stopRequested,
+          transcript: action.interim,
+          fading: false,
+          hideRequest: null,
+        };
+      }
+
+      if (state.captureAttemptId !== action.attemptId) return state;
+      if (action.status === "recording") {
+        return {
+          ...state,
+          phase: "recording",
+          captureMode: action.mode,
+          stopRequested: action.stopRequested,
+          transcript: action.interim,
+        };
+      }
+
+      return {
+        ...state,
+        phase: "transcribing",
+        captureAttemptId: null,
+        captureMode: null,
+        stopRequested: false,
+        transcript: action.interim,
+      };
     }
 
-    case "SET_TRANSCRIPT":
-      if (state.phase !== "recording") return state;
-      return { ...state, transcript: action.transcript };
-
-    case "RECORDING_FAILED":
-      if (state.phase !== "recording") return state;
+    case "CAPTURE_FAILED":
       return {
         ...state,
         phase: "error",
+        captureAttemptId: null,
+        captureMode: null,
+        stopRequested: false,
         errorMsg: action.errorMsg,
         hideRequest: { ms: 5000, seq: nextSeq(state) },
       };
 
-    case "STOP_TRANSCRIBING":
-      if (state.phase !== "recording") return state;
-      return { ...state, phase: "transcribing" };
+    case "CAPTURE_CANCELLED":
+      return { ...initialState };
 
     case "TRANSCRIPT_EMPTY":
       if (state.phase !== "transcribing") return state;
-      // 空結果はいずれも「取れなかった」終端 nospeech。成功表示(done)は出さない。
-      // 無音は明示メッセージを 1500ms、非無音（稀）は素早く 150ms で畳む。
       return {
         ...state,
         phase: "nospeech",
@@ -99,7 +138,7 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
       };
     }
 
-    case "STOP_ERROR":
+    case "POSTPROCESS_ERROR":
       if (state.phase !== "transcribing" && state.phase !== "formatting") return state;
       return {
         ...state,
@@ -108,7 +147,7 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
         hideRequest: { ms: 5000, seq: nextSeq(state) },
       };
 
-    case "ABORT_CANCELLED":
+    case "POSTPROCESS_CANCELLED":
       if (state.phase !== "transcribing" && state.phase !== "formatting") return state;
       return { ...initialState };
 
@@ -126,27 +165,7 @@ export function overlayReducer(state: OverlayState, action: OverlayAction): Over
 }
 
 /**
- * キーエッジ（recording-start）の意味を現在の制御状態だけから決める唯一のガード。
- * ハンドラ側の ref 判定を排し、判定を1箇所（＝status）に集約する。
- */
-export type StartEdge = "start" | "cancel" | "ignore";
-
-export function decideStartEdge(phase: OverlayPhase): StartEdge {
-  if (phase === "recording") return "ignore"; // 既に録音中
-  if (phase === "transcribing" || phase === "formatting") return "cancel"; // 処理中の再押下＝キャンセル
-  return "start"; // idle / done / error / nospeech — 次の録音を開始
-}
-
-/** キーエッジ（recording-stop）の意味。録音中のみ停止し、それ以外は無視する。 */
-export function decideStopEdge(phase: OverlayPhase): "stop" | "ignore" {
-  return phase === "recording" ? "stop" : "ignore";
-}
-
-/**
- * overlayReducer を包む最小ストア。制御 status を単一の真実として同期的に読める。
- * useReducer と違い dispatch 時点で getState() が即更新されるため、mount 時クロージャの
- * イベントハンドラからでも最新 status を読め（stale closure 問題の根本解消）、
- * 連続するキーエッジも同一 tick 内で正しく判定できる。
+ * Overlayは表示専用ストア。録音可否や資源所有の判断はRecordingControllerだけが行う。
  */
 export interface OverlayStore {
   getState: () => OverlayState;
@@ -161,7 +180,7 @@ export function createOverlayStore(): OverlayStore {
     getState: () => state,
     dispatch: (action) => {
       const next = overlayReducer(state, action);
-      if (next === state) return; // 無効遷移（reducer が同一参照を返す）は購読者に通知しない
+      if (next === state) return;
       state = next;
       for (const listener of listeners) listener();
     },

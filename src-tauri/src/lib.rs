@@ -1,6 +1,10 @@
 use enigo::{Enigo, Settings};
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
@@ -16,6 +20,89 @@ struct AppShortcutState {
 /// オーバーレイウィンドウと設定ウィンドウから並行して invoke されうるため必要。
 struct DiagLogState {
     mutex: Mutex<()>,
+}
+
+/// Rust発行tokenで所有者を管理し、旧録音の遅延unmuteが新録音へ干渉しないようにする。
+/// MutexはOSのmute操作も含めて直列化するが、フロント側は期限付きで待つため
+/// COM障害が録音ライフサイクル自体を停止させることはない。
+#[derive(Default)]
+struct SystemAudioMuteState {
+    next_token: AtomicU64,
+    lease: Arc<Mutex<SystemAudioMuteLease>>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+struct SystemAudioMuteLease {
+    highest_seen_token: u64,
+    owner: Option<u64>,
+    released: HashSet<u64>,
+}
+
+fn update_mute_owner(
+    lease: &mut SystemAudioMuteLease,
+    lease_id: u64,
+    mute: bool,
+) -> bool {
+    if mute {
+        if lease_id >= lease.highest_seen_token && !lease.released.contains(&lease_id) {
+            lease.highest_seen_token = lease_id;
+            lease.owner = Some(lease_id);
+        }
+    } else {
+        lease.highest_seen_token = lease.highest_seen_token.max(lease_id);
+        lease.released.insert(lease_id);
+        if lease.owner.is_some_and(|owner| owner <= lease_id) {
+            lease.owner = None;
+        }
+    }
+    // highest_seenより古いtombstoneは今後のacquireが世代比較で必ず拒否されるため不要。
+    lease
+        .released
+        .retain(|released| *released >= lease.highest_seen_token);
+    // stale/重複commandでも現在のdesired状態をOSへ再適用し、失敗後の再試行を可能にする。
+    lease.owner.is_some()
+}
+
+#[cfg(test)]
+mod mute_owner_tests {
+    use super::{update_mute_owner, SystemAudioMuteLease};
+
+    #[test]
+    fn stale_release_cannot_unmute_a_new_attempt() {
+        let mut lease = SystemAudioMuteLease::default();
+        assert!(update_mute_owner(&mut lease, 1, true));
+        assert!(update_mute_owner(&mut lease, 2, true));
+        assert!(update_mute_owner(&mut lease, 1, false));
+        assert_eq!(lease.owner, Some(2));
+        assert!(!update_mute_owner(&mut lease, 2, false));
+        assert!(!update_mute_owner(&mut lease, 2, false));
+        assert_eq!(lease.owner, None);
+    }
+
+    #[test]
+    fn out_of_order_commands_cannot_resurrect_an_old_mute() {
+        let mut lease = SystemAudioMuteLease::default();
+        assert!(!update_mute_owner(&mut lease, 2, false));
+        assert!(!update_mute_owner(&mut lease, 1, true));
+        assert!(!update_mute_owner(&mut lease, 2, true));
+        assert_eq!(lease.owner, None);
+
+        assert!(update_mute_owner(&mut lease, 3, true));
+        assert_eq!(lease.owner, Some(3));
+    }
+
+    #[test]
+    fn newer_release_clears_an_orphaned_old_owner() {
+        let mut lease = SystemAudioMuteLease::default();
+        assert!(update_mute_owner(&mut lease, 1, true));
+        assert!(!update_mute_owner(&mut lease, 2, false));
+        assert_eq!(lease.owner, None);
+
+        assert!(update_mute_owner(&mut lease, 3, true));
+        assert!(update_mute_owner(&mut lease, 2, false));
+        assert_eq!(lease.owner, Some(3));
+        assert!(lease.released.len() <= 1);
+    }
 }
 
 /// 診断ログのパス。履歴ログと同じ `logs/` フォルダ直下。
@@ -141,6 +228,206 @@ fn diag_log_err(
 ) {
     let ctx = format!("{{\"error\":{:?}}}", err.to_string());
     let _ = write_diag_log_internal(app, level, source, message, None, Some(&ctx));
+}
+
+/// CloseHandle が必要な実ハンドルだけを所有する。GetCurrentProcess の擬似ハンドルには使わない。
+#[cfg(target_os = "windows")]
+struct OwnedWinHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for OwnedWinHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// プロセストークンの Mandatory Integrity Level RID を返す。
+/// RID の大小比較にすることで、FreeVoice 自身を管理者実行した場合も正しく扱える。
+#[cfg(target_os = "windows")]
+fn process_integrity_level(process: windows_sys::Win32::Foundation::HANDLE) -> Result<u32, String> {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    unsafe {
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+            return Err(format!(
+                "OpenProcessToken failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let token = OwnedWinHandle(token);
+
+        let mut required_len = 0u32;
+        GetTokenInformation(
+            token.0,
+            TokenIntegrityLevel,
+            null_mut(),
+            0,
+            &mut required_len,
+        );
+        if required_len < size_of::<TOKEN_MANDATORY_LABEL>() as u32 {
+            return Err(format!(
+                "GetTokenInformation(size) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        // Vec<u8> の alignment は1なので、ポインタを構造体へcastせずusizeで整列を保証する。
+        let word_size = size_of::<usize>();
+        let word_count = (required_len as usize).div_ceil(word_size);
+        let mut buffer = vec![0usize; word_count];
+        let buffer_len = (buffer.len() * word_size) as u32;
+        if GetTokenInformation(
+            token.0,
+            TokenIntegrityLevel,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            buffer_len,
+            &mut required_len,
+        ) == 0
+        {
+            return Err(format!(
+                "GetTokenInformation(data) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let label = &*(buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>());
+        let sid = label.Label.Sid;
+        if sid.is_null() {
+            return Err("TokenIntegrityLevel returned a null SID".to_string());
+        }
+        let count_ptr = GetSidSubAuthorityCount(sid);
+        if count_ptr.is_null() || *count_ptr == 0 {
+            return Err("integrity SID has no sub-authority".to_string());
+        }
+        let rid_ptr = GetSidSubAuthority(sid, (*count_ptr - 1) as u32);
+        if rid_ptr.is_null() {
+            return Err("failed to read integrity RID".to_string());
+        }
+        Ok(*rid_ptr)
+    }
+}
+
+fn requires_toggle_stop(own_level: u32, foreground_level: u32) -> bool {
+    foreground_level > own_level
+}
+
+#[cfg(test)]
+mod integrity_level_tests {
+    use super::requires_toggle_stop;
+
+    #[test]
+    fn toggles_only_for_a_higher_integrity_foreground() {
+        assert!(requires_toggle_stop(0x2000, 0x3000));
+        assert!(!requires_toggle_stop(0x3000, 0x3000));
+        assert!(!requires_toggle_stop(0x3000, 0x2000));
+    }
+}
+
+/// フォアグラウンドプロセスの整合性レベルが FreeVoice より高い場合だけ、
+/// Released を信用せず再押下停止へ切り替える。
+#[cfg(target_os = "windows")]
+fn foreground_requires_toggle_stop() -> Result<bool, String> {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return Ok(false);
+        }
+
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return Ok(false);
+        }
+
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Err(format!(
+                "OpenProcess(pid={pid}) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let process = OwnedWinHandle(process);
+
+        let own_level = process_integrity_level(GetCurrentProcess())?;
+        let foreground_level = process_integrity_level(process.0)?;
+        Ok(requires_toggle_stop(own_level, foreground_level))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn foreground_requires_toggle_stop() -> Result<bool, String> {
+    Ok(false)
+}
+
+/// 初期登録とショートカット変更後で同一のイベント処理を使う。
+fn handle_shortcut_event(app: &AppHandle, state: ShortcutState) {
+    match state {
+        ShortcutState::Pressed => {
+            let toggle_stop = match foreground_requires_toggle_stop() {
+                Ok(value) => value,
+                Err(e) => {
+                    // 判定不能を高権限と断定すると通常環境の操作を変えうるため、通常PTTを維持する。
+                    diag_log_err(
+                        app,
+                        "WARN",
+                        "shortcut.integrity",
+                        "foreground integrity detection failed; using hold mode",
+                        e,
+                    );
+                    false
+                }
+            };
+            if toggle_stop {
+                diag_log(
+                    app,
+                    "INFO",
+                    "shortcut.integrity",
+                    "higher-integrity foreground detected; using toggle stop",
+                );
+            }
+            if let Err(e) = app.emit(
+                "recording-start",
+                serde_json::json!({ "toggleStop": toggle_stop }),
+            ) {
+                diag_log_err(
+                    app,
+                    "ERROR",
+                    "shortcut.press",
+                    "emit recording-start failed",
+                    e,
+                );
+            }
+        }
+        ShortcutState::Released => {
+            if let Err(e) = app.emit("recording-stop", ()) {
+                diag_log_err(
+                    app,
+                    "ERROR",
+                    "shortcut.release",
+                    "emit recording-stop failed",
+                    e,
+                );
+            }
+        }
+    }
 }
 
 /// WebView の fetch() は LangSmith の OTLP エンドポイントの CORS で阻まれる
@@ -463,30 +750,7 @@ async fn update_shortcut(
     let app_handle = app.clone();
     app.global_shortcut()
         .on_shortcut(shortcut.as_str(), move |_app, _shortcut, event| {
-            match event.state() {
-                ShortcutState::Pressed => {
-                    if let Err(e) = app_handle.emit("recording-start", ()) {
-                        diag_log_err(
-                            &app_handle,
-                            "ERROR",
-                            "shortcut.press",
-                            "emit recording-start failed",
-                            e,
-                        );
-                    }
-                }
-                ShortcutState::Released => {
-                    if let Err(e) = app_handle.emit("recording-stop", ()) {
-                        diag_log_err(
-                            &app_handle,
-                            "ERROR",
-                            "shortcut.release",
-                            "emit recording-stop failed",
-                            e,
-                        );
-                    }
-                }
-            }
+            handle_shortcut_event(&app_handle, event.state());
         })
         .map_err(|e| e.to_string())?;
 
@@ -501,27 +765,63 @@ unsafe fn set_mute_raw(mute: bool) -> Result<(), String> {
     use windows::Win32::Media::Audio::Endpoints::*;
     use windows::Win32::System::Com::*;
 
-    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    let enumerator: IMMDeviceEnumerator =
-        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
-    let device = enumerator
-        .GetDefaultAudioEndpoint(eRender, eConsole)
-        .map_err(|e| e.to_string())?;
-    let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).map_err(|e| e.to_string())?;
-    volume
-        .SetMute(mute, std::ptr::null())
-        .map_err(|e| e.to_string())
+    let initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+    let result = (|| {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| e.to_string())?;
+        let volume: IAudioEndpointVolume = device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|e| e.to_string())?;
+        volume
+            .SetMute(mute, std::ptr::null())
+            .map_err(|e| e.to_string())
+    })();
+    if initialized {
+        CoUninitialize();
+    }
+    result
+}
+
+#[tauri::command]
+fn create_system_audio_mute_lease(
+    state: tauri::State<'_, SystemAudioMuteState>,
+) -> Result<u64, String> {
+    let previous = state
+        .next_token
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| "system audio mute lease token overflow".to_string())?;
+    Ok(previous + 1)
 }
 
 #[tauri::command]
 #[allow(unused_variables)]
-fn set_system_audio_mute(mute: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        set_mute_raw(mute)
-    }
-    #[cfg(not(target_os = "windows"))]
-    Ok(())
+async fn set_system_audio_mute(
+    state: tauri::State<'_, SystemAudioMuteState>,
+    lease_id: u64,
+    mute: bool,
+) -> Result<(), String> {
+    let lease = Arc::clone(&state.lease);
+    tauri::async_runtime::spawn_blocking(move || {
+        // COM操作をblocking poolへ隔離する。MutexはOS操作まで保持してcommand順序を
+        // 直列化するが、WebView/Tauriのイベント処理スレッドは停止させない。
+        let mut lease = lease
+            .lock()
+            .map_err(|_| "system audio mute state was poisoned".to_string())?;
+        let mute = update_mute_owner(&mut lease, lease_id, mute);
+        #[cfg(target_os = "windows")]
+        unsafe {
+            set_mute_raw(mute)
+        }
+        #[cfg(not(target_os = "windows"))]
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("system audio mute task failed: {e}"))?
 }
 
 pub fn run() {
@@ -535,6 +835,7 @@ pub fn run() {
         .manage(DiagLogState {
             mutex: Mutex::new(()),
         })
+        .manage(SystemAudioMuteState::default())
         .setup(|app| {
             // パニックを最後の砦として診断ログに残す。windowed リリースビルドでは
             // stderr が見えないため、これが無いと Rust 側の異常終了は痕跡ゼロになる。
@@ -644,30 +945,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             app.global_shortcut()
                 .on_shortcut("Ctrl+Shift+Space", move |_app, _shortcut, event| {
-                    match event.state() {
-                        ShortcutState::Pressed => {
-                            if let Err(e) = app_handle.emit("recording-start", ()) {
-                                diag_log_err(
-                                    &app_handle,
-                                    "ERROR",
-                                    "shortcut.press",
-                                    "emit recording-start failed",
-                                    e,
-                                );
-                            }
-                        }
-                        ShortcutState::Released => {
-                            if let Err(e) = app_handle.emit("recording-stop", ()) {
-                                diag_log_err(
-                                    &app_handle,
-                                    "ERROR",
-                                    "shortcut.release",
-                                    "emit recording-stop failed",
-                                    e,
-                                );
-                            }
-                        }
-                    }
+                    handle_shortcut_event(&app_handle, event.state());
                 })?;
 
             // クラッシュ後の再起動時にミュートが残らないよう解除
@@ -687,6 +965,7 @@ pub fn run() {
             get_app_log_dir,
             open_log_folder,
             cleanup_old_logs,
+            create_system_audio_mute_lease,
             set_system_audio_mute,
             append_diag_log,
             post_langsmith_trace,
