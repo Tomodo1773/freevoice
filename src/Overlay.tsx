@@ -8,7 +8,7 @@ import { getContext, refreshContext } from "./windowContext";
 import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
-import { createOverlayStore, decideStartEdge, decideStopEdge } from "./overlayReducer";
+import { createOverlayStore, decideReadyEdge, decideStartEdge, decideStopEdge } from "./overlayReducer";
 import { formatError } from "./errors";
 import { logInfo, logWarn, logError, setLogPhaseSource } from "./diagLog";
 import type { AppSettings } from "./types";
@@ -135,7 +135,7 @@ export default function Overlay() {
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // 開始試行の世代とその開始時刻。getUserMedia 等が停滞して phase=recording のまま
+  // 開始試行の世代とその開始時刻。getUserMedia 等が停滞して phase=starting のまま
   // session が確立しない場合に、再押下での再試行を安全に許すためのガード。
   const startEpochRef = useRef(0);
   const startAttemptAtRef = useRef(0);
@@ -277,7 +277,9 @@ export default function Overlay() {
   const handleStart = async () => {
     // キーエッジの意味は現在の status だけから決める（判定を1箇所に集約）。
     // 最初の await より前に同期的に評価する。
-    const edge = decideStartEdge(store.getState().phase);
+    const phaseAtStart = store.getState().phase;
+    const edge = decideStartEdge(phaseAtStart);
+    let restartingStalledAttempt = false;
     if (edge === "cancel") {
       // 処理中（transcribing/formatting）の再押下＝キャンセル。abortRef は status に従属する実行リソース。
       logInfo("overlay.handleStart", "cancel requested: aborting in-flight processing");
@@ -285,10 +287,11 @@ export default function Overlay() {
       return;
     }
     if (edge === "ignore") {
-      // phase=recording。session が確立済みなら本当に録音中なので無視。
+      // phase=starting/stop-pending/recording。session が確立済みなら開始中または録音中なので無視。
       // 一方 session 未確立のまま START_STALL_MS 超なら開始処理が停滞している。
       // その場合だけ再押下での再試行を許す（下の epoch で停滞中の試行を無効化する）。
-      const stalled = !sessionRef.current
+      const stalled = (phaseAtStart === "starting" || phaseAtStart === "stop-pending")
+        && !sessionRef.current
         && Date.now() - startAttemptAtRef.current >= START_STALL_MS;
       if (!stalled) {
         // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
@@ -296,6 +299,7 @@ export default function Overlay() {
         return;
       }
       logWarn("overlay.handleStart", "restarting stalled start attempt");
+      restartingStalledAttempt = true;
     }
 
     // onRecognitionError は error へ遷移させるがセッションは解放しない（phase 判定では拾えない）。
@@ -314,7 +318,7 @@ export default function Overlay() {
     startAttemptAtRef.current = Date.now();
 
     logInfo("overlay.handleStart", "start");
-    dispatch({ type: "RECORDING_START" });
+    dispatch({ type: restartingStalledAttempt ? "RECORDING_RESTART" : "RECORDING_START" });
     recordingWindowPromiseRef.current = null;
 
     const now = new Date();
@@ -328,6 +332,10 @@ export default function Overlay() {
     let settings = cachedSettingsRef.current;
     try {
       const config = await loadCachedConfig();
+      if (startEpochRef.current !== epoch) {
+        logWarn("overlay.handleStart", "start superseded while loading config");
+        return;
+      }
       settings = config.settings;
       cachedSettingsRef.current = settings;
       cachedApiKeyRef.current = config.apiKey;
@@ -350,6 +358,10 @@ export default function Overlay() {
       silentSinceRef.current = null;
 
       const validated = await validateAudioDevice(settings);
+      if (startEpochRef.current !== epoch) {
+        logWarn("overlay.handleStart", "start superseded while validating audio device");
+        return;
+      }
       const effectiveDeviceId = validated.effectiveDeviceId;
       settings = validated.settings;
       cachedSettingsRef.current = settings;
@@ -399,10 +411,18 @@ export default function Overlay() {
         speechLanguage: settings.speechLanguage,
         audioDeviceId: effectiveDeviceId,
         mediaStream,
-        onInterimResult: (text) => dispatch({ type: "SET_TRANSCRIPT", transcript: text }),
+        onInterimResult: (text) => {
+          if (startEpochRef.current === epoch && sessionRef.current === session) {
+            dispatch({ type: "SET_TRANSCRIPT", transcript: text });
+          }
+        },
         // 原因は transcription 側が onRecognitionError 呼び出し前に logError 済みなので、
         // ここでの再ログはノイズになる。UI 更新だけ行う。
-        onRecognitionError: (msg) => dispatch({ type: "RECORDING_FAILED", errorMsg: msg }),
+        onRecognitionError: (msg) => {
+          if (startEpochRef.current === epoch && sessionRef.current === session) {
+            dispatch({ type: "RECORDING_FAILED", errorMsg: msg });
+          }
+        },
       });
 
       // session.start 中に追い越されていた場合の後始末。追い越した start が
@@ -416,6 +436,24 @@ export default function Overlay() {
             logWarn("overlay.handleStart", "superseded session cleanup failed", { error: e })
           );
         }
+        return;
+      }
+
+      const phaseAfterStart = store.getState().phase;
+      const readyEdge = decideReadyEdge(phaseAfterStart);
+      if (readyEdge === "discard") {
+        logWarn("overlay.handleStart", "session ready after recording became inactive", {
+          phase: phaseAfterStart,
+        });
+        await handleStop();
+        return;
+      }
+
+      dispatch({ type: "RECORDING_READY" });
+
+      if (readyEdge === "stop") {
+        logInfo("overlay.handleStart", "recording ready with queued stop");
+        await handleStop();
         return;
       }
 
@@ -447,6 +485,16 @@ export default function Overlay() {
   };
 
   const handleStop = async () => {
+    const phaseAtStop = store.getState().phase;
+    const edge = decideStopEdge(phaseAtStop);
+    if (edge === "request") {
+      dispatch({ type: "RECORDING_STOP_REQUESTED" });
+      logInfo("overlay.handleStop", "stop queued until recording start completes", {
+        phase: phaseAtStop,
+      });
+      return;
+    }
+
     // await より前に実行リソース（session）を退避・クリア（多重起動対策）。
     const session = sessionRef.current;
     if (!session) {
@@ -464,8 +512,7 @@ export default function Overlay() {
 
     // status が recording でない（例: 認識エラーで既に error へ遷移済み）場合は、
     // 文字起こし/整形パイプラインを回さずリソース解放だけ行う。
-    const phaseAtStop = store.getState().phase;
-    if (decideStopEdge(phaseAtStop) !== "stop") {
+    if (edge !== "stop") {
       logInfo("overlay.handleStop", "release without pipeline");
       await session.stop().catch((e: unknown) =>
         logWarn("overlay.handleStop", "cleanup stop failed", { error: e })
@@ -615,7 +662,11 @@ export default function Overlay() {
   };
 
   // nospeech（無音終端）は表示上は recording と同じ「listening」系で扱い、現行の見た目を温存する。
-  const isRecordingLike = phase === "recording" || phase === "nospeech";
+  const isRecordingLike =
+    phase === "starting" ||
+    phase === "stop-pending" ||
+    phase === "recording" ||
+    phase === "nospeech";
 
   // phase から既存 CSS クラス名へのマッピング（CSS変更不要にする）
   const cssStatus =
@@ -693,4 +744,3 @@ export default function Overlay() {
     </div>
   );
 }
-
