@@ -8,8 +8,17 @@ import { getContext, refreshContext } from "./windowContext";
 import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
 import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
-import { createOverlayStore, decideReadyEdge, decideStartEdge, decideStopEdge } from "./overlayReducer";
-import { formatError } from "./errors";
+import { OverlayView } from "./overlayView";
+import {
+  RecorderController,
+  type RecorderDeps,
+  type RecordingConfig,
+  type RecordingWindow,
+  type SessionCallbacks,
+  type ActiveSession,
+  type FormatOutcome,
+  type LogData,
+} from "./recorder";
 import { logInfo, logWarn, logError, setLogPhaseSource } from "./diagLog";
 import type { AppSettings } from "./types";
 
@@ -47,51 +56,144 @@ async function validateAudioDevice(
   return { effectiveDeviceId: "", settings: updated };
 }
 
-async function loadCachedConfig() {
-  const settings = loadSettings();
+async function loadConfig(): Promise<RecordingConfig> {
+  const initial = loadSettings();
   const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
-  const formatApiKey = settings.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
-  warmupFormatConnection(settings.formatProvider, settings.formatEndpoint);
-  return { settings, apiKey, formatApiKey, langsmithApiKey };
+  const formatApiKey = initial.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
+  warmupFormatConnection(initial.formatProvider, initial.formatEndpoint);
+  const { effectiveDeviceId, settings } = await validateAudioDevice(initial);
+  return { settings, apiKey, formatApiKey, langsmithApiKey, effectiveDeviceId };
 }
 
-/** 開始処理がこの時間内に session を確立できなければ「停滞」とみなし、再押下での再試行を許す。
- *  通常のマイク初期化（100-300ms）や短い権限応答では発火せず、真に hang した場合のみ復帰させる。 */
-const START_STALL_MS = 4000;
+async function resolveWindow(): Promise<RecordingWindow | null> {
+  const fw = await invoke<{ id: string; exe: string; title: string }>("get_foreground_window");
+  return fw.id ? { id: fw.id, exe: fw.exe, title: fw.title } : null;
+}
 
-/** 詳細なエラーを短い定型メッセージに変換する（オーバーレイ表示用） */
-function toUserMessage(err: unknown): string {
-  const msg = formatError(err);
-  if (msg.startsWith("文字起こしAPI エラー")) return "文字起こしAPIでエラーが発生しました";
-  if (msg.startsWith("後処理API エラー")) return "後処理APIでエラーが発生しました";
-  // マイク権限・デバイス系エラー
-  if (err instanceof DOMException) {
-    if (err.name === "NotAllowedError") return "マイクの使用が許可されていません";
-    if (err.name === "NotFoundError") return "マイクが見つかりません";
+async function acquireMic(config: RecordingConfig): Promise<MediaStream> {
+  const id = config.effectiveDeviceId;
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      noiseSuppression: true,
+      echoCancellation: true,
+      ...(id ? { deviceId: { exact: id } } : {}),
+    },
+  });
+}
+
+async function startTranscription(
+  mic: MediaStream,
+  config: RecordingConfig,
+  callbacks: SessionCallbacks
+): Promise<ActiveSession> {
+  const s = config.settings;
+  const session = new TranscriptionSession();
+  try {
+    await session.start({
+      provider: s.transcriptionProvider,
+      endpoint: s.endpoint,
+      apiKey: config.apiKey,
+      model: s.transcriptionModel,
+      speechEndpoint: s.speechEndpoint,
+      speechLanguage: s.speechLanguage,
+      audioDeviceId: config.effectiveDeviceId,
+      mediaStream: mic,
+      onInterimResult: callbacks.onInterim,
+      onRecognitionError: callbacks.onError,
+    });
+  } catch (e) {
+    // 開始に失敗したセッションが掴んだ資源（AudioContext 等）を確実に解放してから投げ直す。
+    await session.stop().catch(() => {});
+    throw e;
   }
-  // 設定バリデーション系のメッセージはそのまま（短いため）
-  if (
-    msg.includes("が未設定です") ||
-    msg.includes("形式で設定してください")
-  ) {
-    return msg;
+  return session;
+}
+
+function formatModelOf(s: AppSettings): string {
+  return s.formatProvider === "openai" ? s.openaiFormatModel : s.azureFormatModel;
+}
+
+async function formatText(
+  raw: string,
+  config: RecordingConfig,
+  context: string | null,
+  signal: AbortSignal
+): Promise<FormatOutcome> {
+  const s = config.settings;
+  const formatModel = formatModelOf(s);
+  const formatStartMs = Date.now();
+  const {
+    text,
+    fallback,
+    fallbackReason,
+    usage,
+    model: responseModel,
+    errorStatus,
+    messages,
+  } = await postprocessWithRetry(
+    raw,
+    s.formatProvider,
+    s.formatEndpoint,
+    config.formatApiKey,
+    formatModel,
+    s.postprocessPrompt,
+    s.reasoningEffort,
+    context ?? undefined,
+    signal
+  );
+  const formatEndMs = Date.now();
+
+  if (s.langsmithEnabled) {
+    void sendLlmSpan({
+      spanName: "format",
+      region: s.langsmithRegion,
+      project: s.langsmithProject,
+      apiKey: config.langsmithApiKey,
+      includeContent: s.langsmithIncludeContent,
+      provider: s.formatProvider,
+      requestModel: formatModel,
+      responseModel,
+      messages,
+      completion: fallback ? undefined : text,
+      reasoningEffort: s.reasoningEffort,
+      usage,
+      startTimeMs: formatStartMs,
+      endTimeMs: formatEndMs,
+      error: fallback ? { message: fallbackReason ?? "format fallback", status: errorStatus } : undefined,
+    });
   }
-  return "エラーが発生しました";
+
+  return { text, fallback, fallbackReason: fallbackReason ?? "" };
 }
 
-interface LogData {
-  transcription: string;
-  formatted: string;
-  topic?: string;
-  window?: { exe: string; title: string };
-  error?: string;
+function refreshTopic(win: RecordingWindow, formatted: string, config: RecordingConfig): void {
+  const s = config.settings;
+  const langsmithConfig = s.langsmithEnabled
+    ? {
+        region: s.langsmithRegion,
+        project: s.langsmithProject,
+        apiKey: config.langsmithApiKey,
+        includeContent: s.langsmithIncludeContent,
+      }
+    : undefined;
+  void refreshContext(
+    win.id,
+    win.exe,
+    win.title,
+    formatted,
+    {
+      formatProvider: s.formatProvider,
+      endpoint: s.formatEndpoint,
+      apiKey: config.formatApiKey,
+      model: formatModelOf(s),
+      reasoningEffort: s.reasoningEffort,
+    },
+    langsmithConfig
+  );
 }
 
-async function saveLogEntry(
-  logFolder: string,
-  now: Date,
-  data: LogData
-): Promise<void> {
+async function saveLogEntry(logFolder: string, now: Date, data: LogData): Promise<void> {
   const isoTimestamp = now.toISOString();
   const datePart = isoTimestamp.slice(0, 10); // YYYY-MM-DD
   const timePart = isoTimestamp.slice(11).replace(/:/g, "-").replace(/\./g, "-"); // HH-MM-SS-mmmZ
@@ -101,49 +203,83 @@ async function saveLogEntry(
   await invoke("save_log", { folder, filename, content });
 }
 
-async function trySaveLog(
-  configuredFolder: string,
-  now: Date,
-  data: LogData
-): Promise<void> {
+async function saveLog(config: RecordingConfig, now: Date, data: LogData): Promise<void> {
   try {
-    const logFolder = configuredFolder || await invoke<string>("get_app_log_dir");
+    const logFolder = config.settings.logFolder.trim() || (await invoke<string>("get_app_log_dir"));
     await saveLogEntry(logFolder, now, data);
   } catch (logErr) {
     logError("overlay.saveLog", "save_log failed", logErr);
   }
 }
 
+function setSystemMute(mute: boolean): Promise<void> {
+  // COM 経由のミュートは録音開始のクリティカルパスを塞がないよう投げっぱなしにする。
+  invoke("set_system_audio_mute", { mute }).catch((e: unknown) =>
+    logWarn("overlay.setSystemMute", "set_system_audio_mute failed", { error: e, mute })
+  );
+  return Promise.resolve();
+}
+
+/** マイク初期化・セッション確立に許す最大時間。超過を「停滞」とみなしエラーで復帰させる。 */
+const START_TIMEOUT_MS = 4000;
+
+function buildDeps(view: OverlayView): RecorderDeps {
+  return {
+    view,
+    now: () => new Date(),
+    startTimeoutMs: START_TIMEOUT_MS,
+    beep: playStartBeep,
+    loadConfig,
+    resolveWindow: () => resolveWindow(),
+    acquireMic,
+    startTranscription,
+    setMute: setSystemMute,
+    getContext,
+    format: formatText,
+    paste: (text, config) => invoke("paste_text", { text, method: config.settings.inputMethod }),
+    saveLog,
+    refreshTopic,
+  };
+}
+
 export default function Overlay() {
-  // 制御 status の単一ストア。UI は購読して描画し、イベントハンドラは store.getState() で
-  // 最新 status を同期読み取りする（sessionRef/abortRef は状態判定に使わず実行リソースに降格）。
-  const storeRef = useRef<ReturnType<typeof createOverlayStore> | null>(null);
-  if (storeRef.current === null) {
-    storeRef.current = createOverlayStore();
-    setLogPhaseSource(() => storeRef.current!.getState().phase);
+  // 表示専用ストア（OverlayView）と録音制御（RecorderController）を1度だけ組み立てる。
+  // 制御はジョブ単一所有、表示はトースト/フェード所有、と責務を分離する。
+  const viewRef = useRef<OverlayView | null>(null);
+  const controllerRef = useRef<RecorderController | null>(null);
+  if (viewRef.current === null) {
+    const view = new OverlayView({
+      showWindow: () => {
+        void (async () => {
+          await invoke("position_overlay").catch((e) =>
+            logWarn("overlay.showWindow", "position_overlay failed", { error: e })
+          );
+          await getCurrentWebviewWindow()
+            .show()
+            .catch((e) => logWarn("overlay.showWindow", "show failed", { error: e }));
+        })();
+      },
+      hideWindow: () => {
+        void getCurrentWebviewWindow()
+          .hide()
+          .catch((e) => logWarn("overlay.hideWindow", "hide failed", { error: e }));
+      },
+    });
+    viewRef.current = view;
+    controllerRef.current = new RecorderController(buildDeps(view));
+    setLogPhaseSource(() => view.getState().status);
   }
-  const store = storeRef.current;
-  const state = useSyncExternalStore(store.subscribe, store.getState);
-  const dispatch = store.dispatch;
-  const { phase, transcript, errorMsg, fallback, fallbackReason, fading, hideRequest } = state;
+  const view = viewRef.current;
+  const controller = controllerRef.current!;
+  const state = useSyncExternalStore(view.subscribe, view.getState);
+  const { status, transcript, errorMsg, fallback, fallbackReason, fading } = state;
 
   const [audioLevel, setAudioLevel] = useState(0);
   const [silentWarn, setSilentWarn] = useState(false);
 
-  const sessionRef = useRef<TranscriptionSession | null>(null);
   const realtimeTextRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number | null>(null);
   const silentSinceRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  // 開始試行の世代とその開始時刻。getUserMedia 等が停滞して phase=starting のまま
-  // session が確立しない場合に、再押下での再試行を安全に許すためのガード。
-  const startEpochRef = useRef(0);
-  const startAttemptAtRef = useRef(0);
-  const recordingWindowPromiseRef = useRef<Promise<{ id: string; exe: string; title: string } | null> | null>(null);
-  const cachedApiKeyRef = useRef("");
-  const cachedFormatApiKeyRef = useRef("");
-  const cachedLangsmithApiKeyRef = useRef("");
-  const cachedSettingsRef = useRef(loadSettings());
 
   useEffect(() => {
     logInfo("overlay.init", "overlay window initialized");
@@ -154,7 +290,7 @@ export default function Overlay() {
     (async () => {
       try {
         const settings = loadSettings();
-        const logFolder = settings.logFolder.trim() || await invoke<string>("get_app_log_dir");
+        const logFolder = settings.logFolder.trim() || (await invoke<string>("get_app_log_dir"));
         await invoke("cleanup_old_logs", { folder: logFolder, keepDays: 30 });
       } catch (e) {
         logError("overlay.init", "cleanup_old_logs failed", e);
@@ -175,8 +311,8 @@ export default function Overlay() {
 
     (async () => {
       const unlisteners = await Promise.all([
-        listen("recording-start", () => handleStart()),
-        listen("recording-stop", () => handleStop()),
+        listen("recording-start", () => controller.keyDown()),
+        listen("recording-stop", () => controller.keyUp()),
         // トレイ「ログを開く」から発火。設定済みフォルダ（空ならデフォルト）を Rust で開く
         listen("open-log-folder", () => {
           const logFolder = loadSettings().logFolder.trim();
@@ -198,14 +334,14 @@ export default function Overlay() {
       disposed = true;
       cleanup?.();
     };
-  }, []);
+  }, [controller]);
 
-  // VUメーター更新ループ
+  // VUメーター更新ループ。録音中のみ、現在ジョブの音声レベルを読む。
+  const isRecordingActive = status === "recording";
   useEffect(() => {
     const tick = () => {
-      const s = sessionRef.current;
-      if (phase === "recording" && s) {
-        const lvl = s.getAudioLevel();
+      if (view.getState().status === "recording") {
+        const lvl = controller.getAudioLevel();
         setAudioLevel(lvl);
 
         const now = Date.now();
@@ -228,7 +364,7 @@ export default function Overlay() {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [phase === "recording"]);
+  }, [isRecordingActive, controller, view]);
 
   // リアルタイムテキスト末尾を常に表示
   useEffect(() => {
@@ -237,477 +373,44 @@ export default function Overlay() {
     }
   }, [transcript]);
 
-  // hideRequest を監視してフェード開始タイマーを起動
-  useEffect(() => {
-    if (!hideRequest) return;
+  // empty（無音終端）は表示上は recording と同じ「listening」系で扱い、現行の見た目を温存する。
+  const isRecordingLike = status === "recording" || status === "empty";
 
-    const timer = setTimeout(() => {
-      dispatch({ type: "BEGIN_FADE" });
-    }, hideRequest.ms);
+  // status から既存 CSS クラス名へのマッピング（CSS変更不要にする）
+  const cssStatus = isRecordingLike || status === "hidden" ? "listening" : status;
 
-    return () => clearTimeout(timer);
-  }, [hideRequest?.seq]);
-
-  // fading 開始後、400ms でウィンドウを非表示にしてリセット
-  useEffect(() => {
-    if (!fading) return;
-
-    const timer = setTimeout(async () => {
-      const appWindow = getCurrentWebviewWindow();
-      await appWindow.hide();
-      dispatch({ type: "FADE_DONE" });
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [fading]);
-
-  // 処理（transcribing/formatting）への遷移と、キャンセル用 AbortController を対で扱う。
-  // set と dispatch を1関数に閉じ込め、「abortRef 非null ⟺ 処理中 status」の整合を
-  // 実行順序ではなく構造で担保する（並べ替えで静かにキャンセルが壊れるのを防ぐ）。
-  const beginProcessing = (): AbortController => {
-    const controller = new AbortController();
-    abortRef.current = controller;
-    dispatch({ type: "STOP_TRANSCRIBING" });
-    return controller;
-  };
-  const endProcessing = () => {
-    abortRef.current = null;
-  };
-
-  const handleStart = async () => {
-    // キーエッジの意味は現在の status だけから決める（判定を1箇所に集約）。
-    // 最初の await より前に同期的に評価する。
-    const phaseAtStart = store.getState().phase;
-    const edge = decideStartEdge(phaseAtStart);
-    let restartingStalledAttempt = false;
-    if (edge === "cancel") {
-      // 処理中（transcribing/formatting）の再押下＝キャンセル。abortRef は status に従属する実行リソース。
-      logInfo("overlay.handleStart", "cancel requested: aborting in-flight processing");
-      abortRef.current?.abort();
-      return;
-    }
-    if (edge === "ignore") {
-      // phase=starting/stop-pending/recording。session が確立済みなら開始中または録音中なので無視。
-      // 一方 session 未確立のまま START_STALL_MS 超なら開始処理が停滞している。
-      // その場合だけ再押下での再試行を許す（下の epoch で停滞中の試行を無効化する）。
-      const stalled = (phaseAtStart === "starting" || phaseAtStart === "stop-pending")
-        && !sessionRef.current
-        && Date.now() - startAttemptAtRef.current >= START_STALL_MS;
-      if (!stalled) {
-        // 録音中に再度キーが来た＝取りこぼしや二重押下。無言で捨てず記録する。
-        logWarn("overlay.handleStart", "start ignored: recording already active");
-        return;
-      }
-      logWarn("overlay.handleStart", "restarting stalled start attempt");
-      restartingStalledAttempt = true;
-    }
-
-    // onRecognitionError は error へ遷移させるがセッションは解放しない（phase 判定では拾えない）。
-    // 新規録音を始める前に、居残った旧セッションを確実に解放してリソースリークを防ぐ。
-    const staleSession = sessionRef.current;
-    if (staleSession) {
-      sessionRef.current = null;
-      void staleSession.stop().catch((e: unknown) =>
-        logWarn("overlay.handleStart", "stale session cleanup failed", { error: e })
-      );
-    }
-
-    // この開始試行の世代印。以降の await で世代が進んでいたら（新たな start に追い越されたら）
-    // 途中で確保したリソースを解放して黙って降りる。
-    const epoch = ++startEpochRef.current;
-    startAttemptAtRef.current = Date.now();
-
-    logInfo("overlay.handleStart", "start");
-    dispatch({ type: restartingStalledAttempt ? "RECORDING_RESTART" : "RECORDING_START" });
-    recordingWindowPromiseRef.current = null;
-
-    const now = new Date();
-    try {
-      playStartBeep();
-    } catch (e) {
-      logWarn("overlay.handleStart", "start beep failed", { error: e });
-    }
-
-    let mediaStream: MediaStream | null = null;
-    let settings = cachedSettingsRef.current;
-    try {
-      const config = await loadCachedConfig();
-      if (startEpochRef.current !== epoch) {
-        logWarn("overlay.handleStart", "start superseded while loading config");
-        return;
-      }
-      settings = config.settings;
-      cachedSettingsRef.current = settings;
-      cachedApiKeyRef.current = config.apiKey;
-      cachedFormatApiKeyRef.current = config.formatApiKey;
-      cachedLangsmithApiKeyRef.current = config.langsmithApiKey;
-
-      // 文脈スコープ用にフォアグラウンドウィンドウを取得。await せず録音中に解決させ、
-      // overlay show + getUserMedia の並列化（クリティカルパス）を阻害しない。
-      if (settings.contextAwareFormatting) {
-        recordingWindowPromiseRef.current = invoke<{ id: string; exe: string; title: string }>("get_foreground_window")
-          .then((fw) => (fw.id ? { id: fw.id, exe: fw.exe, title: fw.title } : null))
-          .catch((e) => {
-            logWarn("overlay.handleStart", "get_foreground_window failed", { error: e });
-            return null;
-          });
-      }
-
-      setAudioLevel(0);
-      setSilentWarn(false);
-      silentSinceRef.current = null;
-
-      const validated = await validateAudioDevice(settings);
-      if (startEpochRef.current !== epoch) {
-        logWarn("overlay.handleStart", "start superseded while validating audio device");
-        return;
-      }
-      const effectiveDeviceId = validated.effectiveDeviceId;
-      settings = validated.settings;
-      cachedSettingsRef.current = settings;
-
-      const appWindow = getCurrentWebviewWindow();
-
-      // オーバーレイ表示と getUserMedia を並列実行（100-300ms短縮）
-      const [, ms] = await Promise.all([
-        (async () => {
-          await invoke("position_overlay").catch((e) =>
-            logWarn("overlay.handleStart", "position_overlay failed", { error: e })
-          );
-          await appWindow.show();
-        })(),
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            noiseSuppression: true,
-            echoCancellation: true,
-            ...(effectiveDeviceId ? { deviceId: { exact: effectiveDeviceId } } : {}),
-          },
-        }),
-      ]);
-      mediaStream = ms;
-
-      // 別の start に追い越されていたら、掴んだマイクを解放してこの試行は降りる
-      // （まだ session もミュートも触っていないのでストリーム停止だけでよい）。
-      if (startEpochRef.current !== epoch) {
-        logWarn("overlay.handleStart", "start superseded before session setup");
-        mediaStream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-
-      const session = new TranscriptionSession();
-      sessionRef.current = session;
-
-      invoke("set_system_audio_mute", { mute: true }).catch((e: unknown) =>
-        logWarn("overlay.handleStart", "set_system_audio_mute(true) failed", { error: e })
-      );
-
-      await session.start({
-        provider: settings.transcriptionProvider,
-        endpoint: settings.endpoint,
-        apiKey: cachedApiKeyRef.current,
-        model: settings.transcriptionModel,
-        speechEndpoint: settings.speechEndpoint,
-        speechLanguage: settings.speechLanguage,
-        audioDeviceId: effectiveDeviceId,
-        mediaStream,
-        onInterimResult: (text) => {
-          if (startEpochRef.current === epoch && sessionRef.current === session) {
-            dispatch({ type: "SET_TRANSCRIPT", transcript: text });
-          }
-        },
-        // 原因は transcription 側が onRecognitionError 呼び出し前に logError 済みなので、
-        // ここでの再ログはノイズになる。UI 更新だけ行う。
-        onRecognitionError: (msg) => {
-          if (startEpochRef.current === epoch && sessionRef.current === session) {
-            dispatch({ type: "RECORDING_FAILED", errorMsg: msg });
-          }
-        },
-      });
-
-      // session.start 中に追い越されていた場合の後始末。追い越した start が
-      // staleSession 経由でこの session を既に停止・差し替え済みなら sessionRef は別物なので触らない。
-      // ミュート状態は追い越した録音が所有するため解除しない。
-      if (startEpochRef.current !== epoch) {
-        logWarn("overlay.handleStart", "start superseded after session.start");
-        if (sessionRef.current === session) {
-          sessionRef.current = null;
-          void session.stop().catch((e: unknown) =>
-            logWarn("overlay.handleStart", "superseded session cleanup failed", { error: e })
-          );
-        }
-        return;
-      }
-
-      const phaseAfterStart = store.getState().phase;
-      const readyEdge = decideReadyEdge(phaseAfterStart);
-      if (readyEdge === "discard") {
-        logWarn("overlay.handleStart", "session ready after recording became inactive", {
-          phase: phaseAfterStart,
-        });
-        await handleStop();
-        return;
-      }
-
-      dispatch({ type: "RECORDING_READY" });
-
-      if (readyEdge === "stop") {
-        logInfo("overlay.handleStart", "recording ready with queued stop");
-        await handleStop();
-        return;
-      }
-
-      logInfo("overlay.handleStart", "recording started", {
-        provider: settings.transcriptionProvider,
-      });
-    } catch (e) {
-      // 追い越された試行の失敗は、新しい録音の状態（sessionRef/ミュート/phase）を壊さないよう
-      // 自分が掴んだ mediaStream だけ解放して黙って降りる。
-      if (startEpochRef.current !== epoch) {
-        logWarn("overlay.handleStart", "superseded start attempt failed", { error: e });
-        mediaStream?.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      // セッション作成済みならミュート解除。MediaStream が掴まれていれば確実に解放。
-      if (sessionRef.current) {
-        sessionRef.current = null;
-        invoke("set_system_audio_mute", { mute: false }).catch((muteErr: unknown) =>
-          logWarn("overlay.handleStart", "set_system_audio_mute(false) failed", { error: muteErr })
-        );
-      }
-      mediaStream?.getTracks().forEach((t) => t.stop());
-      logError("overlay.handleStart", "start failed", e, {
-        provider: settings.transcriptionProvider,
-      });
-      dispatch({ type: "RECORDING_FAILED", errorMsg: toUserMessage(e) });
-      await trySaveLog(settings.logFolder.trim(), now, { transcription: "", formatted: "", error: formatError(e) });
-    }
-  };
-
-  const handleStop = async () => {
-    const phaseAtStop = store.getState().phase;
-    const edge = decideStopEdge(phaseAtStop);
-    if (edge === "request") {
-      dispatch({ type: "RECORDING_STOP_REQUESTED" });
-      logInfo("overlay.handleStop", "stop queued until recording start completes", {
-        phase: phaseAtStop,
-      });
-      return;
-    }
-
-    // await より前に実行リソース（session）を退避・クリア（多重起動対策）。
-    const session = sessionRef.current;
-    if (!session) {
-      // キーを離したのに何も起きない事象を追えるよう、無視した stop も記録する。
-      logInfo("overlay.handleStop", "stop ignored: no active session", {
-        processing: abortRef.current !== null,
-      });
-      return;
-    }
-    sessionRef.current = null;
-
-    invoke("set_system_audio_mute", { mute: false }).catch((e: unknown) =>
-      logWarn("overlay.handleStop", "set_system_audio_mute(false) failed", { error: e })
-    );
-
-    // status が recording でない（例: 認識エラーで既に error へ遷移済み）場合は、
-    // 文字起こし/整形パイプラインを回さずリソース解放だけ行う。
-    if (edge !== "stop") {
-      logInfo("overlay.handleStop", "release without pipeline");
-      await session.stop().catch((e: unknown) =>
-        logWarn("overlay.handleStop", "cleanup stop failed", { error: e })
-      );
-      return;
-    }
-
-    logInfo("overlay.handleStop", "stop");
-    const settings = cachedSettingsRef.current;
-
-    // 録音開始時に起動したウィンドウ取得を解決（録音中に完了済みのはず）し、話題コンテキストを引く
-    const winPromise = recordingWindowPromiseRef.current;
-    const win = settings.contextAwareFormatting && winPromise ? await winPromise : null;
-    const injectedContext = win ? getContext(win.id) : null;
-
-    const now = new Date();
-    let rawTranscript = "";
-    let formattedText = "";
-    let stopError: unknown = null;
-
-    const controller = beginProcessing();
-
-    try {
-      const raw = await session.stop(controller.signal);
-      if (!raw.trim()) {
-        endProcessing();
-        const logEmpty = session.wasSilent ? logInfo : logWarn;
-        logEmpty("overlay.handleStop", "empty transcript", {
-          silent: session.wasSilent,
-          provider: settings.transcriptionProvider,
-        });
-        dispatch({ type: "TRANSCRIPT_EMPTY", silent: session.wasSilent });
-        return;
-      }
-
-      rawTranscript = raw;
-      // 「文字起こしは取れたが以降が進まない」事象の切り分け用に、整形へ渡す直前を記録する。
-      logInfo("overlay.handleStop", "transcript received, starting format", {
-        provider: settings.transcriptionProvider,
-        transcriptLen: raw.length,
-        hasContext: !!injectedContext,
-      });
-      dispatch({ type: "TRANSCRIPT_READY", transcript: raw });
-      const formatModel = settings.formatProvider === "openai" ? settings.openaiFormatModel : settings.azureFormatModel;
-      const formatStartMs = Date.now();
-      const {
-        text: formatted,
-        fallback,
-        fallbackReason,
-        usage: formatUsage,
-        model: formatResponseModel,
-        errorStatus: formatErrorStatus,
-        messages: formatMessages,
-      } = await postprocessWithRetry(
-        raw,
-        settings.formatProvider,
-        settings.formatEndpoint,
-        cachedFormatApiKeyRef.current,
-        formatModel,
-        settings.postprocessPrompt,
-        settings.reasoningEffort,
-        injectedContext ?? undefined,
-        controller.signal
-      );
-      const formatEndMs = Date.now();
-      formattedText = formatted;
-      logInfo("overlay.handleStop", "format complete", {
-        fallback,
-        fallbackReason,
-        formattedLen: formatted.length,
-        durationMs: formatEndMs - formatStartMs,
-      });
-
-      const langsmithConfig = settings.langsmithEnabled ? {
-        region: settings.langsmithRegion,
-        project: settings.langsmithProject,
-        apiKey: cachedLangsmithApiKeyRef.current,
-        includeContent: settings.langsmithIncludeContent,
-      } as const : undefined;
-
-      if (langsmithConfig) {
-        void sendLlmSpan({
-          spanName: "format",
-          ...langsmithConfig,
-          provider: settings.formatProvider,
-          requestModel: formatModel,
-          responseModel: formatResponseModel,
-          messages: formatMessages,
-          completion: fallback ? undefined : formatted,
-          reasoningEffort: settings.reasoningEffort,
-          usage: formatUsage,
-          startTimeMs: formatStartMs,
-          endTimeMs: formatEndMs,
-          error: fallback
-            ? { message: fallbackReason ?? "format fallback", status: formatErrorStatus }
-            : undefined,
-        });
-      }
-
-      await invoke("paste_text", { text: formatted, method: settings.inputMethod });
-      logInfo("overlay.handleStop", "pasted", { method: settings.inputMethod, textLen: formatted.length });
-      dispatch({ type: "FORMAT_DONE", fallback, fallbackReason });
-
-      // paste 後に非同期で話題コンテキストを更新（レイテンシに影響させない）。
-      // fallback（整形失敗で生テキスト）時は誤りを取り込まないよう蒸留しない。
-      if (win && !fallback) {
-        void refreshContext(win.id, win.exe, win.title, formatted, {
-          formatProvider: settings.formatProvider,
-          endpoint: settings.formatEndpoint,
-          apiKey: cachedFormatApiKeyRef.current,
-          model: formatModel,
-          reasoningEffort: settings.reasoningEffort,
-        }, langsmithConfig);
-      }
-    } catch (e) {
-      // AbortError はキャンセルなので即非表示（フェード不要）
-      if (e instanceof DOMException && e.name === "AbortError") {
-        // 再操作による中断。貼り付けまで到達しなかった理由をブレッドクラムとして残す。
-        logInfo("overlay.handleStop", "cancelled by user (re-trigger during processing)", {
-          hadTranscript: !!rawTranscript,
-          transcriptLen: rawTranscript.length,
-          formatted: formattedText !== "",
-        });
-        const appWindow = getCurrentWebviewWindow();
-        await appWindow.hide();
-        dispatch({ type: "ABORT_CANCELLED" });
-        return;
-      }
-      stopError = e;
-      logError("overlay.handleStop", "stop failed", e);
-      dispatch({ type: "STOP_ERROR", errorMsg: toUserMessage(e) });
-    } finally {
-      endProcessing();
-      const configuredFolder = settings.logFolder.trim();
-      const hasError = stopError !== null && formattedText === "";
-      // 設定フォルダがある → 全ログ出力。設定なし + エラー → デフォルトパスにエラーログのみ出力
-      if (rawTranscript || hasError) {
-        await trySaveLog(configuredFolder, now, {
-          transcription: rawTranscript,
-          formatted: formattedText,
-          ...(win ? { window: { exe: win.exe, title: win.title } } : {}),
-          ...(injectedContext ? { topic: injectedContext } : {}),
-          ...(hasError ? { error: formatError(stopError) } : {}),
-        });
-      }
-    }
-  };
-
-  // nospeech（無音終端）は表示上は recording と同じ「listening」系で扱い、現行の見た目を温存する。
-  const isRecordingLike =
-    phase === "starting" ||
-    phase === "stop-pending" ||
-    phase === "recording" ||
-    phase === "nospeech";
-
-  // phase から既存 CSS クラス名へのマッピング（CSS変更不要にする）
-  const cssStatus =
-    (isRecordingLike || phase === "idle") ? "listening" : phase;
-
-  const pillClass = [
-    "overlay-pill",
-    `status-${cssStatus}`,
-    fading ? "fading" : "",
-  ]
+  const pillClass = ["overlay-pill", `status-${cssStatus}`, fading ? "fading" : ""]
     .filter(Boolean)
     .join(" ");
 
   const icon =
     isRecordingLike ? "●" :
-    (phase === "transcribing" || phase === "formatting") ? <span className="spinner">◌</span> :
-    phase === "done" ? "✓" :
-    phase === "error" ? "!" :
+    (status === "transcribing" || status === "formatting") ? <span className="spinner">◌</span> :
+    status === "done" ? "✓" :
+    status === "error" ? "!" :
     null;
 
   const statusLabel =
     isRecordingLike
       ? "Recording"
-      : phase === "transcribing"
+      : status === "transcribing"
       ? "Transcribing"
-      : phase === "formatting"
+      : status === "formatting"
       ? "Formatting"
-      : phase === "done"
+      : status === "done"
       ? "Done"
-      : phase === "error"
+      : status === "error"
       ? "Error"
       : "";
 
   const text =
     isRecordingLike
       ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
-      : phase === "transcribing"
+      : status === "transcribing"
       ? "Transcribing..."
-      : phase === "formatting"
+      : status === "formatting"
       ? "Formatting..."
-      : phase === "done"
+      : status === "done"
       ? (fallback ? `スキップ: ${fallbackReason || "エラー"}` : "Completed")
       : errorMsg;
 
@@ -720,7 +423,7 @@ export default function Overlay() {
           <span className="overlay-status">{statusLabel}</span>
         </div>
         <div className="overlay-body">
-          {phase === "recording" && (
+          {status === "recording" && (
             <span className="vu" aria-hidden="true">
               <span
                 className="vu-bar"
@@ -730,12 +433,12 @@ export default function Overlay() {
           )}
           <span
             ref={isRecordingLike && transcript ? realtimeTextRef : undefined}
-            className={`overlay-text${phase === "error" ? " overlay-text-error" : ""}${isRecordingLike && transcript ? " overlay-text-realtime" : ""}`}
+            className={`overlay-text${status === "error" ? " overlay-text-error" : ""}${isRecordingLike && transcript ? " overlay-text-realtime" : ""}`}
           >
             {text}
           </span>
         </div>
-        {phase === "error" && (
+        {status === "error" && (
           <span className="overlay-meta">
             詳細はログファイルに出力されています
           </span>
