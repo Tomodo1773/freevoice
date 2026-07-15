@@ -87,9 +87,9 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
     loadConfig: async () => config,
     resolveWindow: async () => null,
     acquireMic: async () => mic,
-    startTranscription: async (_mic, _config, cb) => {
+    createSession: (_mic, _config, cb) => {
       capturedCallbacks = cb;
-      return session;
+      return { session, ready: Promise.resolve() };
     },
     setMute: async (m) => void muteCalls.push(m),
     getContext: () => null,
@@ -185,14 +185,14 @@ describe("RecorderController / RecordingJob", () => {
 
   describe("開始処理中の keyUp（旧 stop-pending の置換）", () => {
     it("session 確立前に離しても、確立後にそのまま処理へ進む", async () => {
-      const startGate = deferred<ActiveSession>();
+      const startGate = deferred<void>();
       const session = {
         stop: vi.fn(async () => "やあ"),
         getAudioLevel: () => 0,
         wasSilent: false,
       } as ActiveSession & { stop: ReturnType<typeof vi.fn> };
-      const startTranscription = vi.fn(() => startGate.promise);
-      const h = harness({ startTranscription });
+      const createSession = vi.fn(() => ({ session, ready: startGate.promise }));
+      const h = harness({ createSession });
 
       h.controller.keyDown();
       await settle();
@@ -200,7 +200,7 @@ describe("RecorderController / RecordingJob", () => {
       h.controller.keyUp();
       await settle();
       // ここで session 確立 → 即 stop して処理へ
-      startGate.resolve(session);
+      startGate.resolve();
       await settle();
 
       expect(h.pasteCalls).toEqual(["やあ(整形)"]);
@@ -257,7 +257,7 @@ describe("RecorderController / RecordingJob", () => {
         getAudioLevel: () => 0,
         wasSilent: true,
       } as ActiveSession & { stop: ReturnType<typeof vi.fn> };
-      const h = harness({ startTranscription: async () => session });
+      const h = harness({ createSession: () => ({ session, ready: Promise.resolve() }) });
       h.controller.keyDown();
       await settle();
       h.controller.keyUp();
@@ -285,10 +285,16 @@ describe("RecorderController / RecordingJob", () => {
     });
 
     it("セッション開始失敗でも error 表示し、ミュートは確実に解除される", async () => {
-      const startTranscription = vi.fn(async () => {
-        throw new Error("endpoint が未設定です");
-      });
-      const h = harness({ startTranscription });
+      const failedSession = {
+        stop: vi.fn(async () => ""),
+        getAudioLevel: () => 0,
+        wasSilent: false,
+      } as ActiveSession & { stop: ReturnType<typeof vi.fn> };
+      const createSession = vi.fn(() => ({
+        session: failedSession,
+        ready: Promise.reject(new Error("endpoint が未設定です")),
+      }));
+      const h = harness({ createSession });
       h.controller.keyDown();
       await settle();
 
@@ -309,6 +315,87 @@ describe("RecorderController / RecordingJob", () => {
 
       expect(h.calls.some((c) => c.startsWith("error:"))).toBe(true);
       expect(h.controller.isRecording).toBe(false);
+    });
+
+    it("タイムアウト後にマイク取得が遅れて成功してもストリームを解放する", async () => {
+      const micGate = deferred<MediaStream>();
+      const lateTrackStop = vi.fn();
+      const lateMic = {
+        getTracks: () => [{ stop: lateTrackStop }],
+      } as unknown as MediaStream;
+      const h = harness({ acquireMic: () => micGate.promise, startTimeoutMs: 20 });
+
+      h.controller.keyDown();
+      await new Promise((r) => setTimeout(r, 40));
+      await settle();
+
+      micGate.resolve(lateMic);
+      await settle();
+      expect(lateTrackStop).toHaveBeenCalledTimes(1);
+    });
+
+    it("設定読込を含む開始処理全体が startTimeoutMs で打ち切られる", async () => {
+      const configGate = deferred<RecordingConfig>();
+      const h = harness({ loadConfig: () => configGate.promise, startTimeoutMs: 20 });
+
+      h.controller.keyDown();
+      await new Promise((r) => setTimeout(r, 40));
+      await settle();
+
+      expect(h.calls.some((c) => c.startsWith("error:"))).toBe(true);
+      expect(h.controller.isRecording).toBe(false);
+    });
+
+    it("セッション開始がタイムアウトしても await 前から所有して停止する", async () => {
+      const readyGate = deferred<void>();
+      let callbacks: SessionCallbacks | undefined;
+      const pendingSession = {
+        stop: vi.fn(async () => ""),
+        getAudioLevel: () => 0,
+        wasSilent: false,
+      } as ActiveSession & { stop: ReturnType<typeof vi.fn> };
+      const h = harness({
+        createSession: (_mic, _config, cb) => {
+          callbacks = cb;
+          return { session: pendingSession, ready: readyGate.promise };
+        },
+        startTimeoutMs: 20,
+      });
+
+      h.controller.keyDown();
+      await new Promise((r) => setTimeout(r, 40));
+      await settle();
+
+      expect(pendingSession.stop).toHaveBeenCalledTimes(1);
+      expect(h.calls.some((c) => c.startsWith("error:"))).toBe(true);
+      callbacks!.onInterim("遅延した古い文字起こし");
+      expect(h.calls).not.toContain("transcript:遅延した古い文字起こし");
+      readyGate.resolve();
+    });
+  });
+
+  describe("終端と次の録音", () => {
+    it("ログ保存中でも done 表示後の keyDown で次の録音を開始できる", async () => {
+      const logGate = deferred<void>();
+      const loadConfig = vi.fn(harness().deps.loadConfig);
+      const h = harness({
+        loadConfig,
+        saveLog: () => logGate.promise,
+      });
+
+      h.controller.keyDown();
+      await settle();
+      h.controller.keyUp();
+      await settle();
+      expect(h.calls).toContain("done:false:");
+
+      h.controller.keyDown();
+      await settle();
+      expect(loadConfig).toHaveBeenCalledTimes(2);
+
+      logGate.resolve();
+      h.controller.keyUp();
+      await settle();
     });
   });
 

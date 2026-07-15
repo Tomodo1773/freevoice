@@ -15,7 +15,7 @@ import {
   type RecordingConfig,
   type RecordingWindow,
   type SessionCallbacks,
-  type ActiveSession,
+  type PendingSession,
   type FormatOutcome,
   type LogData,
 } from "./recorder";
@@ -82,32 +82,26 @@ async function acquireMic(config: RecordingConfig): Promise<MediaStream> {
   });
 }
 
-async function startTranscription(
+function createTranscriptionSession(
   mic: MediaStream,
   config: RecordingConfig,
   callbacks: SessionCallbacks
-): Promise<ActiveSession> {
+): PendingSession {
   const s = config.settings;
   const session = new TranscriptionSession();
-  try {
-    await session.start({
-      provider: s.transcriptionProvider,
-      endpoint: s.endpoint,
-      apiKey: config.apiKey,
-      model: s.transcriptionModel,
-      speechEndpoint: s.speechEndpoint,
-      speechLanguage: s.speechLanguage,
-      audioDeviceId: config.effectiveDeviceId,
-      mediaStream: mic,
-      onInterimResult: callbacks.onInterim,
-      onRecognitionError: callbacks.onError,
-    });
-  } catch (e) {
-    // 開始に失敗したセッションが掴んだ資源（AudioContext 等）を確実に解放してから投げ直す。
-    await session.stop().catch(() => {});
-    throw e;
-  }
-  return session;
+  const ready = session.start({
+    provider: s.transcriptionProvider,
+    endpoint: s.endpoint,
+    apiKey: config.apiKey,
+    model: s.transcriptionModel,
+    speechEndpoint: s.speechEndpoint,
+    speechLanguage: s.speechLanguage,
+    audioDeviceId: config.effectiveDeviceId,
+    mediaStream: mic,
+    onInterimResult: callbacks.onInterim,
+    onRecognitionError: callbacks.onError,
+  });
+  return { session, ready };
 }
 
 function formatModelOf(s: AppSettings): string {
@@ -232,7 +226,7 @@ function buildDeps(view: OverlayView): RecorderDeps {
     loadConfig,
     resolveWindow: () => resolveWindow(),
     acquireMic,
-    startTranscription,
+    createSession: createTranscriptionSession,
     setMute: setSystemMute,
     getContext,
     format: formatText,
@@ -340,7 +334,8 @@ export default function Overlay() {
   const isRecordingActive = status === "recording";
   useEffect(() => {
     const tick = () => {
-      if (view.getState().status === "recording") {
+      // 表示上の recording は開始待ちも含む。無音時間はセッション確立後だけ計測する。
+      if (view.getState().status === "recording" && controller.isRecording) {
         const lvl = controller.getAudioLevel();
         setAudioLevel(lvl);
 
@@ -353,6 +348,7 @@ export default function Overlay() {
           setSilentWarn(false);
         }
       } else {
+        silentSinceRef.current = null;
         setAudioLevel(0);
         setSilentWarn(false);
       }

@@ -35,6 +35,12 @@ export interface ActiveSession {
   readonly wasSilent: boolean;
 }
 
+/** セッション本体を await 前から所有するための開始ハンドル。 */
+export interface PendingSession {
+  session: ActiveSession;
+  ready: Promise<void>;
+}
+
 export interface SessionCallbacks {
   onInterim: (text: string) => void;
   onError: (message: string) => void;
@@ -54,7 +60,7 @@ export interface LogData {
   error?: string;
 }
 
-/** ジョブが呼ぶ表示側の窓口。制御と表示を分離し、表示の遅延/フェードは実装側に閉じ込める。 */
+/** 録音制御が呼ぶ表示側の窓口。制御と表示を分離し、表示の遅延/フェードは実装側に閉じ込める。 */
 export interface RecorderView {
   /** 録音の見た目を出す（ウィンドウ表示＋「Recording」ピル）。開始直後に即呼ぶ。 */
   recording(): void;
@@ -80,11 +86,11 @@ export interface RecorderDeps {
   loadConfig: () => Promise<RecordingConfig>;
   resolveWindow: (config: RecordingConfig) => Promise<RecordingWindow | null>;
   acquireMic: (config: RecordingConfig) => Promise<MediaStream>;
-  startTranscription: (
+  createSession: (
     mic: MediaStream,
     config: RecordingConfig,
     callbacks: SessionCallbacks
-  ) => Promise<ActiveSession>;
+  ) => PendingSession;
   setMute: (mute: boolean) => Promise<void>;
   getContext: (windowId: string) => string | null;
   format: (
@@ -100,6 +106,18 @@ export interface RecorderDeps {
 }
 
 type StopSignal = { reason: "release" } | { reason: "recognition-error"; message: string };
+
+interface JobLog {
+  config: RecordingConfig;
+  now: Date;
+  data: LogData;
+}
+
+type JobResult =
+  | { kind: "done"; fallback: boolean; fallbackReason: string; log: JobLog }
+  | { kind: "empty"; silent: boolean; log?: JobLog }
+  | { kind: "error"; message: string; log?: JobLog }
+  | { kind: "cancelled"; log?: JobLog };
 
 function isAbortError(e: unknown): boolean {
   return e instanceof DOMException && e.name === "AbortError";
@@ -120,12 +138,59 @@ export function toUserMessage(err: unknown): string {
   return "エラーが発生しました";
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, makeError: () => Error): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(makeError()), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+class StartTimeoutError extends Error {}
+
+/** 開始処理全体で共有する絶対期限。各 await ごとに制限時間を足し直さない。 */
+class StartDeadline {
+  private readonly expiresAt: number;
+
+  constructor(timeoutMs: number) {
+    this.expiresAt = Date.now() + timeoutMs;
+  }
+
+  async wait<T>(promise: Promise<T>): Promise<T> {
+    const remaining = this.expiresAt - Date.now();
+    if (remaining <= 0) {
+      void promise.catch(() => {});
+      throw new StartTimeoutError("録音の開始がタイムアウトしました");
+    }
+
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new StartTimeoutError("録音の開始がタイムアウトしました")),
+        remaining
+      );
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /** タイムアウト後に遅れて取得できたリソースも、その場で破棄する。 */
+  async acquire<T>(promise: Promise<T>, dispose: (value: T) => void | Promise<void>): Promise<T> {
+    try {
+      return await this.wait(promise);
+    } catch (e) {
+      if (e instanceof StartTimeoutError) {
+        void promise.then(
+          (value) => Promise.resolve(dispose(value)).catch((disposeError) =>
+            logWarn("recorder.deadline", "late resource cleanup failed", { error: disposeError })
+          ),
+          () => {}
+        );
+      }
+      throw e;
+    }
+  }
+}
+
+function stopMediaStream(stream: MediaStream): void {
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch (e) {
+      logWarn("recorder.cleanup", "media track cleanup failed", { error: e });
+    }
+  }
 }
 
 /**
@@ -138,6 +203,7 @@ export class RecordingJob {
 
   private readonly abort = new AbortController();
   private session: ActiveSession | null = null;
+  private acceptsSessionCallbacks = true;
 
   private stopSettled = false;
   private stopResolve!: (signal: StopSignal) => void;
@@ -168,67 +234,63 @@ export class RecordingJob {
     this.stopResolve(signal);
   }
 
-  async run(): Promise<void> {
+  async run(): Promise<JobResult> {
     this.deps.view.recording();
+    const deadline = new StartDeadline(this.deps.startTimeoutMs);
     try {
       this.deps.beep();
     } catch (e) {
       logWarn("recorder.run", "start beep failed", { error: e });
     }
 
-    let config: RecordingConfig;
+    let config: RecordingConfig | null = null;
+    let mic: MediaStream | null = null;
     try {
-      config = await this.deps.loadConfig();
-    } catch (e) {
-      logError("recorder.run", "loadConfig failed", e);
-      this.deps.view.error(toUserMessage(e));
-      return;
-    }
+      config = await deadline.wait(this.deps.loadConfig());
+      // 文脈スコープ用のフォアグラウンドウィンドウ取得は録音と並行させ、貼り付け直前に解決する。
+      const windowPromise = config.settings.contextAwareFormatting
+        ? this.deps.resolveWindow(config).catch((e) => {
+            logWarn("recorder.run", "resolveWindow failed", { error: e });
+            return null;
+          })
+        : Promise.resolve<RecordingWindow | null>(null);
 
-    // 文脈スコープ用のフォアグラウンドウィンドウ取得は録音と並行させ、貼り付け直前に解決する。
-    const windowPromise = config.settings.contextAwareFormatting
-      ? this.deps.resolveWindow(config).catch((e) => {
-          logWarn("recorder.run", "resolveWindow failed", { error: e });
-          return null;
-        })
-      : Promise.resolve<RecordingWindow | null>(null);
+      mic = await deadline.acquire(this.deps.acquireMic(config), stopMediaStream);
 
-    let mic: MediaStream;
-    try {
-      mic = await withTimeout(
-        this.deps.acquireMic(config),
-        this.deps.startTimeoutMs,
-        () => new Error("マイクの初期化がタイムアウトしました")
-      );
-    } catch (e) {
-      logError("recorder.run", "acquireMic failed", e, {
-        provider: config.settings.transcriptionProvider,
-      });
-      this.deps.view.error(toUserMessage(e));
-      await this.deps.saveLog(config, this.deps.now(), {
-        transcription: "",
-        formatted: "",
-        error: formatError(e),
-      });
-      return;
-    }
-
-    try {
-      const stop = await this.recordUntilStop(mic, config);
-      if (stop === null) return; // 開始失敗（表示・ログ済み）
+      const stop = await this.recordUntilStop(mic, config, deadline);
       if (stop.reason === "recognition-error") {
-        this.deps.view.error(stop.message);
-        await this.deps.saveLog(config, this.deps.now(), {
-          transcription: "",
-          formatted: "",
-          error: stop.message,
-        });
-        return;
+        return {
+          kind: "error",
+          message: stop.message,
+          log: {
+            config,
+            now: this.deps.now(),
+            data: { transcription: "", formatted: "", error: stop.message },
+          },
+        };
       }
+
       this.phase = "processing";
-      await this.process(config, windowPromise);
+      return await this.process(config, windowPromise);
+    } catch (e) {
+      logError("recorder.run", "job failed", e, {
+        ...(config ? { provider: config.settings.transcriptionProvider } : {}),
+      });
+      return {
+        kind: "error",
+        message: toUserMessage(e),
+        ...(config
+          ? {
+              log: {
+                config,
+                now: this.deps.now(),
+                data: { transcription: "", formatted: "", error: formatError(e) },
+              },
+            }
+          : {}),
+      };
     } finally {
-      // どの経路で抜けてもマイクとセッションを解放する（process が消費済みなら session は null）。
+      // 終端結果を返す前に、ジョブが所有するリソースをすべて解放する。
       const leftover = this.session;
       this.session = null;
       if (leftover) {
@@ -236,7 +298,7 @@ export class RecordingJob {
           logWarn("recorder.run", "leftover session cleanup failed", { error: e })
         );
       }
-      mic.getTracks().forEach((t) => t.stop());
+      if (mic) stopMediaStream(mic);
     }
   }
 
@@ -244,12 +306,13 @@ export class RecordingJob {
    * ミュートを掛けてセッションを開始し、キー解放または認識エラーが来るまで待つ。
    * ミュート解除は「録音が終わった瞬間」に必ず行いたいので、この区間だけを finally で囲う
    * （処理中は既に解除済みで、システム音は塞がない）。
-   * 戻り値: 停止シグナル / 開始に失敗したら null。
+   * 開始失敗は呼び出し元へ例外として返し、停止シグナルだけを戻す。
    */
   private async recordUntilStop(
     mic: MediaStream,
-    config: RecordingConfig
-  ): Promise<StopSignal | null> {
+    config: RecordingConfig,
+    deadline: StartDeadline
+  ): Promise<StopSignal> {
     logInfo("recorder.recordUntilStop", "start", {
       provider: config.settings.transcriptionProvider,
     });
@@ -257,33 +320,26 @@ export class RecordingJob {
       logWarn("recorder.recordUntilStop", "set mute(true) failed", { error: e })
     );
     try {
-      try {
-        this.session = await withTimeout(
-          this.deps.startTranscription(mic, config, {
-            onInterim: (text) => this.deps.view.transcript(text),
-            onError: (message) => this.settleStop({ reason: "recognition-error", message }),
-          }),
-          this.deps.startTimeoutMs,
-          () => new Error("録音の開始がタイムアウトしました")
-        );
-      } catch (e) {
-        logError("recorder.recordUntilStop", "startTranscription failed", e, {
-          provider: config.settings.transcriptionProvider,
-        });
-        this.deps.view.error(toUserMessage(e));
-        await this.deps.saveLog(config, this.deps.now(), {
-          transcription: "",
-          formatted: "",
-          error: formatError(e),
-        });
-        return null;
-      }
+      const pending = this.deps.createSession(mic, config, {
+        onInterim: (text) => {
+          if (this.acceptsSessionCallbacks) this.deps.view.transcript(text);
+        },
+        onError: (message) => {
+          if (this.acceptsSessionCallbacks) {
+            this.settleStop({ reason: "recognition-error", message });
+          }
+        },
+      });
+      // ready を待つ前からジョブが session を所有する。タイムアウト時も finally で停止できる。
+      this.session = pending.session;
+      await deadline.wait(pending.ready);
       this.phase = "recording";
       logInfo("recorder.recordUntilStop", "recording", {
         provider: config.settings.transcriptionProvider,
       });
       return await this.stopSignal;
     } finally {
+      this.acceptsSessionCallbacks = false;
       await this.deps.setMute(false).catch((e: unknown) =>
         logWarn("recorder.recordUntilStop", "set mute(false) failed", { error: e })
       );
@@ -294,7 +350,7 @@ export class RecordingJob {
   private async process(
     config: RecordingConfig,
     windowPromise: Promise<RecordingWindow | null>
-  ): Promise<void> {
+  ): Promise<JobResult> {
     const session = this.session!;
     this.session = null; // 所有権を取る。run の finally が二重 stop しないように。
     const signal = this.abort.signal;
@@ -302,22 +358,31 @@ export class RecordingJob {
 
     this.deps.view.transcribing();
 
-    const win = await windowPromise;
-    const context = win ? this.deps.getContext(win.id) : null;
-
     let raw = "";
     let formatted = "";
-    let processError: unknown = null;
+    let win: RecordingWindow | null = null;
+    let context: string | null = null;
+    const makeLog = (includeError = false, error?: unknown): JobLog => ({
+      config,
+      now,
+      data: {
+        transcription: raw,
+        formatted,
+        ...(win ? { window: { exe: win.exe, title: win.title } } : {}),
+        ...(context ? { topic: context } : {}),
+        ...(includeError ? { error: formatError(error) } : {}),
+      },
+    });
     try {
-      raw = await session.stop(signal);
+      [raw, win] = await Promise.all([session.stop(signal), windowPromise]);
+      context = win ? this.deps.getContext(win.id) : null;
       if (!raw.trim()) {
         const log = session.wasSilent ? logInfo : logWarn;
         log("recorder.process", "empty transcript", {
           silent: session.wasSilent,
           provider: config.settings.transcriptionProvider,
         });
-        this.deps.view.empty(session.wasSilent);
-        return;
+        return { kind: "empty", silent: session.wasSilent };
       }
 
       logInfo("recorder.process", "transcript received, starting format", {
@@ -341,12 +406,16 @@ export class RecordingJob {
         method: config.settings.inputMethod,
         textLen: formatted.length,
       });
-      this.deps.view.done(outcome.fallback, outcome.fallbackReason);
-
       // fallback（整形失敗で生テキスト）時は誤りを取り込まないよう蒸留しない。
       if (win && !outcome.fallback) {
         this.deps.refreshTopic(win, formatted, config);
       }
+      return {
+        kind: "done",
+        fallback: outcome.fallback,
+        fallbackReason: outcome.fallbackReason,
+        log: makeLog(),
+      };
     } catch (e) {
       if (isAbortError(e)) {
         logInfo("recorder.process", "cancelled by user (re-trigger during processing)", {
@@ -354,23 +423,18 @@ export class RecordingJob {
           transcriptLen: raw.length,
           formatted: formatted !== "",
         });
-        this.deps.view.cancelled();
-        return;
+        return {
+          kind: "cancelled",
+          ...(raw ? { log: makeLog() } : {}),
+        };
       }
-      processError = e;
       logError("recorder.process", "process failed", e);
-      this.deps.view.error(toUserMessage(e));
-    } finally {
-      const hasError = processError !== null && formatted === "";
-      if (raw || hasError) {
-        await this.deps.saveLog(config, now, {
-          transcription: raw,
-          formatted,
-          ...(win ? { window: { exe: win.exe, title: win.title } } : {}),
-          ...(context ? { topic: context } : {}),
-          ...(hasError ? { error: formatError(processError) } : {}),
-        });
-      }
+      const hasError = formatted === "";
+      return {
+        kind: "error",
+        message: toUserMessage(e),
+        ...(raw || hasError ? { log: makeLog(hasError, e) } : {}),
+      };
     }
   }
 }
@@ -401,9 +465,13 @@ export class RecorderController {
     }
     const newJob = new RecordingJob(this.deps);
     this.job = newJob;
-    void newJob.run().finally(() => {
-      if (this.job === newJob) this.job = null;
-    });
+    void newJob.run().then(
+      (result) => this.finish(newJob, result),
+      (e) => {
+        logError("recorder.keyDown", "unexpected job failure", e);
+        this.finish(newJob, { kind: "error", message: toUserMessage(e) });
+      }
+    );
   }
 
   keyUp(): void {
@@ -420,5 +488,33 @@ export class RecorderController {
 
   get isRecording(): boolean {
     return this.job?.phase === "recording";
+  }
+
+  private finish(job: RecordingJob, result: JobResult): void {
+    if (this.job !== job) return;
+
+    // 終端表示より先に所有権を解放し、表示中の次回 keyDown を新しい録音として受け付ける。
+    this.job = null;
+    switch (result.kind) {
+      case "done":
+        this.deps.view.done(result.fallback, result.fallbackReason);
+        break;
+      case "empty":
+        this.deps.view.empty(result.silent);
+        break;
+      case "error":
+        this.deps.view.error(result.message);
+        break;
+      case "cancelled":
+        this.deps.view.cancelled();
+        break;
+    }
+
+    if (result.log) {
+      const { config, now, data } = result.log;
+      void this.deps.saveLog(config, now, data).catch((e) =>
+        logWarn("recorder.finish", "saveLog failed", { error: e })
+      );
+    }
   }
 }
