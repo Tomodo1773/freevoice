@@ -6,6 +6,7 @@ import {
   type RecordingConfig,
   type SessionCallbacks,
   type ActiveSession,
+  type FormatOutcome,
 } from "./recorder";
 import { DEFAULT_SETTINGS } from "./types";
 
@@ -48,6 +49,7 @@ interface Harness {
   deps: RecorderDeps;
   calls: string[];
   muteCalls: boolean[];
+  cancelableCalls: boolean[];
   pasteCalls: string[];
   savedLogs: Record<string, unknown>[];
   refreshCalls: { formatted: string }[];
@@ -59,6 +61,7 @@ interface Harness {
 function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): Harness {
   const { view, calls } = makeView();
   const muteCalls: boolean[] = [];
+  const cancelableCalls: boolean[] = [];
   const pasteCalls: string[] = [];
   const savedLogs: Record<string, unknown>[] = [];
   const refreshCalls: { formatted: string }[] = [];
@@ -92,6 +95,7 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
       return { session, ready: Promise.resolve() };
     },
     setMute: async (m) => void muteCalls.push(m),
+    setCancelable: (c) => void cancelableCalls.push(c),
     getContext: () => null,
     format: async (raw) => ({ text: `${raw}(整形)`, fallback: false, fallbackReason: "" }),
     paste: async (t) => void pasteCalls.push(t),
@@ -105,6 +109,7 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
     deps,
     calls,
     muteCalls,
+    cancelableCalls,
     pasteCalls,
     savedLogs,
     refreshCalls,
@@ -225,28 +230,98 @@ describe("RecorderController / RecordingJob", () => {
     });
   });
 
-  describe("処理中のキャンセル", () => {
-    it("整形中の再 keyDown で AbortError → cancelled 表示、貼り付けない", async () => {
-      const formatGate = deferred<{ text: string; fallback: boolean; fallbackReason: string }>();
-      const format = vi.fn((_raw: string, _c: RecordingConfig, _ctx: string | null, signal: AbortSignal) => {
-        signal.addEventListener("abort", () => {
-          formatGate.reject(new DOMException("aborted", "AbortError"));
-        });
-        return formatGate.promise;
-      });
-      const h = harness({ format });
+  describe("キャンセル（Esc）", () => {
+    /** 整形を宙吊りにして、処理中（formatting）で止まったジョブを作る。 */
+    async function stalledInFormatting() {
+      const formatGate = deferred<FormatOutcome>();
+      const format = vi.fn(
+        (_raw: string, _c: RecordingConfig, _ctx: string | null, signal: AbortSignal) => {
+          signal.addEventListener("abort", () => {
+            formatGate.reject(new DOMException("aborted", "AbortError"));
+          });
+          return formatGate.promise;
+        }
+      );
+      const loadConfig = vi.fn(harness().deps.loadConfig);
+      const h = harness({ format, loadConfig });
 
       h.controller.keyDown();
       await settle();
       h.controller.keyUp();
       await settle();
-      // ここで formatting 中。再押下でキャンセル。
       expect(h.calls).toContain("formatting");
-      h.controller.keyDown();
+      return { h, loadConfig, formatGate };
+    }
+
+    it("整形中の Esc で AbortError → cancelled 表示、貼り付けない", async () => {
+      const { h } = await stalledInFormatting();
+
+      h.controller.cancel();
       await settle();
 
       expect(h.calls).toContain("cancelled");
       expect(h.pasteCalls).toEqual([]);
+    });
+
+    it("処理中の keyDown はキャンセルも新規録音もしない", async () => {
+      const { h, loadConfig, formatGate } = await stalledInFormatting();
+
+      h.controller.keyDown();
+      await settle();
+
+      expect(h.calls).not.toContain("cancelled");
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+
+      // 中断されていないので、整形が返れば通常どおり完了する
+      formatGate.resolve({ text: "こんにちは(整形)", fallback: false, fallbackReason: "" });
+      await settle();
+      expect(h.pasteCalls).toEqual(["こんにちは(整形)"]);
+    });
+
+    it("録音中の Esc は無視され、そのまま録音を続けて完了できる", async () => {
+      const h = harness();
+      h.controller.keyDown();
+      await settle();
+
+      h.controller.cancel();
+      await settle();
+      expect(h.controller.isRecording).toBe(true);
+      expect(h.calls).not.toContain("cancelled");
+
+      h.controller.keyUp();
+      await settle();
+      expect(h.pasteCalls).toEqual(["こんにちは(整形)"]);
+    });
+
+    it("ジョブが無いときの Esc は無視される", async () => {
+      const h = harness();
+      h.controller.cancel();
+      await settle();
+      expect(h.calls).toEqual([]);
+    });
+  });
+
+  describe("キャンセル可能区間の同期", () => {
+    it("処理に入るまでは開かれず、終端で必ず閉じられる", async () => {
+      const h = harness();
+      h.controller.keyDown();
+      await settle();
+      expect(h.cancelableCalls).toEqual([]); // 録音中はまだ Esc を奪わない
+
+      h.controller.keyUp();
+      await settle();
+      expect(h.cancelableCalls).toEqual([true, false]);
+    });
+
+    it("開始に失敗して処理に入らなかったジョブでも閉じられる", async () => {
+      const acquireMic = vi.fn(async () => {
+        throw new DOMException("denied", "NotAllowedError");
+      });
+      const h = harness({ acquireMic });
+      h.controller.keyDown();
+      await settle();
+
+      expect(h.cancelableCalls).toEqual([false]);
     });
   });
 
