@@ -1,3 +1,5 @@
+mod cancel_hook;
+
 use enigo::{Enigo, Settings};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -495,6 +497,12 @@ async fn update_shortcut(
     Ok(())
 }
 
+/// 処理中（文字起こし/整形）の間だけ true にして、Esc をキャンセルとして消費させる。
+#[tauri::command]
+fn set_cancelable(cancelable: bool) {
+    cancel_hook::set_cancelable(cancelable);
+}
+
 #[cfg(target_os = "windows")]
 unsafe fn set_mute_raw(mute: bool) -> Result<(), String> {
     use windows::Win32::Media::Audio::*;
@@ -670,6 +678,9 @@ pub fn run() {
                     }
                 })?;
 
+            // Esc キャンセル用のフックを常設する（消費するのは処理中の Esc だけ）
+            cancel_hook::install(app.handle().clone());
+
             // クラッシュ後の再起動時にミュートが残らないよう解除
             #[cfg(target_os = "windows")]
             let _ = unsafe { set_mute_raw(false) };
@@ -688,6 +699,7 @@ pub fn run() {
             open_log_folder,
             cleanup_old_logs,
             set_system_audio_mute,
+            set_cancelable,
             append_diag_log,
             post_langsmith_trace,
         ])

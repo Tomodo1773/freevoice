@@ -214,6 +214,12 @@ function setSystemMute(mute: boolean): Promise<void> {
   return Promise.resolve();
 }
 
+function setCancelable(cancelable: boolean): void {
+  invoke("set_cancelable", { cancelable }).catch((e: unknown) =>
+    logWarn("overlay.setCancelable", "set_cancelable failed", { error: e, cancelable })
+  );
+}
+
 /** マイク初期化・セッション確立に許す最大時間。超過を「停滞」とみなしエラーで復帰させる。 */
 const START_TIMEOUT_MS = 4000;
 
@@ -228,6 +234,7 @@ function buildDeps(view: OverlayView): RecorderDeps {
     acquireMic,
     createSession: createTranscriptionSession,
     setMute: setSystemMute,
+    setCancelable,
     getContext,
     format: formatText,
     paste: (text, config) => invoke("paste_text", { text, method: config.settings.inputMethod }),
@@ -307,6 +314,8 @@ export default function Overlay() {
       const unlisteners = await Promise.all([
         listen("recording-start", () => controller.keyDown()),
         listen("recording-stop", () => controller.keyUp()),
+        // 処理中の Esc（低レベルフックが消費したもの）だけが届く
+        listen("recording-cancel", () => controller.cancel()),
         // トレイ「ログを開く」から発火。設定済みフォルダ（空ならデフォルト）を Rust で開く
         listen("open-log-folder", () => {
           const logFolder = loadSettings().logFolder.trim();

@@ -92,6 +92,8 @@ export interface RecorderDeps {
     callbacks: SessionCallbacks
   ) => PendingSession;
   setMute: (mute: boolean) => Promise<void>;
+  /** Esc をキャンセルとして消費してよい区間かを OS 側フックへ伝える（投げっぱなしで良い）。 */
+  setCancelable: (cancelable: boolean) => void;
   getContext: (windowId: string) => string | null;
   format: (
     raw: string,
@@ -219,7 +221,7 @@ export class RecordingJob {
     this.settleStop({ reason: "release" });
   }
 
-  /** 処理中（transcribing/formatting）の再押下＝キャンセル。 */
+  /** 処理中（transcribing/formatting）の Esc ＝キャンセル。 */
   cancel(): void {
     this.abort.abort();
   }
@@ -271,6 +273,8 @@ export class RecordingJob {
       }
 
       this.phase = "processing";
+      // キャンセル可能区間の開始。マイクなどと同じくジョブが所有し、finally で必ず閉じる。
+      this.deps.setCancelable(true);
       return await this.process(config, windowPromise);
     } catch (e) {
       logError("recorder.run", "job failed", e, {
@@ -291,6 +295,7 @@ export class RecordingJob {
       };
     } finally {
       // 終端結果を返す前に、ジョブが所有するリソースをすべて解放する。
+      this.deps.setCancelable(false);
       const leftover = this.session;
       this.session = null;
       if (leftover) {
@@ -418,7 +423,7 @@ export class RecordingJob {
       };
     } catch (e) {
       if (isAbortError(e)) {
-        logInfo("recorder.process", "cancelled by user (re-trigger during processing)", {
+        logInfo("recorder.process", "cancelled by user (Esc during processing)", {
           hadTranscript: !!raw,
           transcriptLen: raw.length,
           formatted: formatted !== "",
@@ -440,9 +445,11 @@ export class RecordingJob {
 }
 
 /**
- * 受付係。アプリ全体でジョブは常に最大1つ。キーの押下/解放は「判断」せず、この一点に集約する。
- * - 押下: ジョブが無ければ録音開始。処理中なら中止。開始処理中/録音中なら無視。
+ * 受付係。アプリ全体でジョブは常に最大1つ。入力は「判断」せず、この一点に集約する。
+ * 入力は START（押下）/ STOP（解放）/ CANCEL（Esc）の3つに分かれ、1入力＝1意味に保つ。
+ * - 押下: ジョブが無ければ録音開始。あればフェーズを問わず無視。
  * - 解放: 走っているジョブに解放を伝えるだけ。
+ * - Esc: 処理中のジョブだけを中止。
  * これにより「同時に走る開始処理」自体が存在しなくなり、追い越し判定が構造的に不要になる。
  */
 export class RecorderController {
@@ -451,16 +458,10 @@ export class RecorderController {
   constructor(private readonly deps: RecorderDeps) {}
 
   keyDown(): void {
-    const job = this.job;
-    if (job) {
-      if (job.phase === "processing") {
-        logInfo("recorder.keyDown", "cancel requested: aborting in-flight processing");
-        job.cancel();
-      } else {
-        logWarn("recorder.keyDown", "start ignored: recording already active", {
-          phase: job.phase,
-        });
-      }
+    if (this.job) {
+      logWarn("recorder.keyDown", "start ignored: job already active", {
+        phase: this.job.phase,
+      });
       return;
     }
     const newJob = new RecordingJob(this.deps);
@@ -480,6 +481,19 @@ export class RecorderController {
       return;
     }
     this.job.release();
+  }
+
+  /** Esc によるキャンセル。処理中のジョブだけを中止する（録音中は捨てる操作を持たない）。 */
+  cancel(): void {
+    const job = this.job;
+    if (job?.phase !== "processing") {
+      logInfo("recorder.cancel", "cancel ignored: nothing to cancel", {
+        phase: job?.phase ?? "none",
+      });
+      return;
+    }
+    logInfo("recorder.cancel", "cancel requested: aborting in-flight processing");
+    job.cancel();
   }
 
   getAudioLevel(): number {
