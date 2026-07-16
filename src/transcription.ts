@@ -66,6 +66,8 @@ export class TranscriptionSession {
   private reconnectEnabled = false;
   private reconnectCount = 0;
   private reconnectPromise: Promise<void> | null = null;
+  /** stop 後の開始処理再開を禁止する。一度きりのセッション所有を保証する。 */
+  private closed = false;
 
   async start(params: {
     provider: TranscriptionProvider;
@@ -79,6 +81,7 @@ export class TranscriptionSession {
     onInterimResult?: (text: string) => void;
     onRecognitionError?: (message: string) => void;
   }): Promise<void> {
+    if (this.closed) throw new DOMException("session closed", "AbortError");
     this.provider = params.provider;
     this.endpoint = params.endpoint;
     this.apiKey = params.apiKey;
@@ -98,14 +101,21 @@ export class TranscriptionSession {
     }
 
     // 全プロバイダー共通: VU メーター用にマイク取得（外部から渡された場合は再利用）
-    this.mediaStream = params.mediaStream ?? await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        noiseSuppression: true,
-        echoCancellation: true,
-        ...(params.audioDeviceId ? { deviceId: { exact: params.audioDeviceId } } : {}),
-      },
-    });
+    const mediaStream =
+      params.mediaStream ??
+      (await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          noiseSuppression: true,
+          echoCancellation: true,
+          ...(params.audioDeviceId ? { deviceId: { exact: params.audioDeviceId } } : {}),
+        },
+      }));
+    if (this.closed) {
+      mediaStream.getTracks().forEach((track) => track.stop());
+      throw new DOMException("session closed", "AbortError");
+    }
+    this.mediaStream = mediaStream;
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
     this.analyser = this.audioContext.createAnalyser();
@@ -115,13 +125,19 @@ export class TranscriptionSession {
     this.peakAudioLevel = 0;
 
     if (this.provider === "azure-speech") {
-      this.SpeechSDK = await import("microsoft-cognitiveservices-speech-sdk");
+      const SDK = await import("microsoft-cognitiveservices-speech-sdk");
+      if (this.closed) throw new DOMException("session closed", "AbortError");
+      this.SpeechSDK = SDK;
       this.recognizedTexts = [];
       this.lastInterimText = "";
       this.stopping = false;
       this.reconnectEnabled = false;
       this.reconnectCount = 0;
       await this.startRecognizer();
+      if (this.closed) {
+        this.closeRecognizer();
+        throw new DOMException("session closed", "AbortError");
+      }
       this.reconnectEnabled = true;
       return;
     }
@@ -257,6 +273,7 @@ export class TranscriptionSession {
 
   /** 一時的エラーからの再接続。蓄積テキストを保持し、暫定テキストを昇格させてから再開する。 */
   private async attemptReconnect(errorCode: number, errorDetails: string): Promise<void> {
+    if (this.closed) return;
     this.reconnectCount++;
     logWarn("transcription.canceled", `reconnecting (${this.reconnectCount}/${TranscriptionSession.MAX_RECONNECTS})`, {
       errorCode,
@@ -324,6 +341,7 @@ export class TranscriptionSession {
   }
 
   async stop(signal?: AbortSignal): Promise<string> {
+    this.closed = true;
     // 共通: peakAudioLevel 最終更新
     this.getAudioLevel();
 
