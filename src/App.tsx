@@ -292,7 +292,7 @@ export default function App() {
                 </Text>
                 {defaultLogDir && (
                   <Text size="1" color="gray" mt="1" as="p">
-                    エラーログ・診断ログの出力先（設定に関わらず常時）: <code>{defaultLogDir}</code>
+                    エラーログ・診断ログの出力先（設定に関わらず常時、タスクトレイの「エラーログを開く」で開けます）: <code>{defaultLogDir}</code>
                   </Text>
                 )}
               </Box>

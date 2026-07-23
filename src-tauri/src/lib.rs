@@ -451,6 +451,22 @@ fn open_log_folder(app: AppHandle, folder: Option<String>) -> Result<(), String>
     Ok(())
 }
 
+/// エラーログ（診断ログ freevoice.log）をエクスプローラーで選択表示する。
+/// setup() の起動マーカーで先に書き込まれるため、トレイ操作時点でファイルは必ず存在する。
+fn open_error_log(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let path = diag_log_path(app)?;
+        // パスに空白があっても explorer に 1 引数で渡るよう raw_arg でまとめる
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn update_shortcut(
     app: AppHandle,
@@ -574,9 +590,14 @@ pub fn run() {
 
             let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "設定", true, None::<&str>)?;
-            let open_logs_item = MenuItem::with_id(app, "open_logs", "ログを開く", true, None::<&str>)?;
+            let open_logs_item = MenuItem::with_id(app, "open_logs", "履歴ログを開く", true, None::<&str>)?;
+            let open_error_log_item =
+                MenuItem::with_id(app, "open_error_log", "エラーログを開く", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "再起動", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings_item, &open_logs_item, &restart_item, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&settings_item, &open_logs_item, &open_error_log_item, &restart_item, &quit],
+            )?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
@@ -592,6 +613,12 @@ pub fn run() {
                     "open_logs" => {
                         if let Err(e) = app.emit("open-log-folder", ()) {
                             diag_log_err(app, "WARN", "tray.open_logs", "emit failed", e);
+                        }
+                    }
+                    // エラーログのパスは設定に依存せず固定なので、フロントを経由せず直接開く
+                    "open_error_log" => {
+                        if let Err(e) = open_error_log(app) {
+                            diag_log_err(app, "WARN", "tray.open_error_log", "open failed", e);
                         }
                     }
                     "settings" => {
