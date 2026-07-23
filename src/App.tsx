@@ -525,7 +525,7 @@ export default function App() {
                   id="formatModel"
                   value={isOpenai ? form.openaiFormatModel : form.azureFormatModel}
                   onChange={(e) => handleChange(isOpenai ? "openaiFormatModel" : "azureFormatModel", e.target.value)}
-                  placeholder={isOpenai ? "gpt-4o" : "gpt-5.2"}
+                  placeholder="gpt-5.6-terra"
                 />
               </Box>
 
