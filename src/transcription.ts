@@ -43,6 +43,8 @@ export class TranscriptionSession {
   private static readonly MAX_RECONNECTS = 3;
   private static readonly RECONNECT_DELAY_MS = 1000;
   private static readonly RECONNECT_TIMEOUT_MS = 5000;
+  /** 無音区間で連発する NoMatch を間引くログ間隔。 */
+  private static readonly NOMATCH_LOG_INTERVAL_MS = 5000;
 
   private provider: TranscriptionProvider = "azure-openai";
   private endpoint = "";
@@ -60,6 +62,11 @@ export class TranscriptionSession {
   /** 最新の暫定テキスト。recognized（確定）で空にし、recognizing（暫定）で更新する。
    *  stop 時に recognized が間に合わない環境向けのフォールバック。 */
   private lastInterimText = "";
+  /** 最後に SDK の認識イベント（recognizing/recognized）を受けた時刻。
+   *  stop 時にこれが古い＝イベント自体が止まった（世界B: SDK/サービスのストール）を切り分ける。 */
+  private lastEventAt = 0;
+  /** NoMatch ログのスロットル用。連発する NoMatch を一定間隔に間引く。 */
+  private lastNoMatchLogAt = 0;
 
   private stopping = false;
   /** 初回 startRecognizer 成功後にのみ true。start() 中の canceled+reject 二重発火によるリークを防ぐ。 */
@@ -130,6 +137,8 @@ export class TranscriptionSession {
       this.SpeechSDK = SDK;
       this.recognizedTexts = [];
       this.lastInterimText = "";
+      this.lastEventAt = Date.now();
+      this.lastNoMatchLogAt = 0;
       this.stopping = false;
       this.reconnectEnabled = false;
       this.reconnectCount = 0;
@@ -151,6 +160,19 @@ export class TranscriptionSession {
       if (event.data.size > 0) this.chunks.push(event.data);
     };
     this.mediaRecorder.start(250);
+  }
+
+  /** 無音区間で連発する NoMatch を一定間隔に間引いて記録する。
+   *  録音中にこれが出続けていれば「音声は SDK に届いているのに認識されない」= 世界A（マイク供給側の異常）。
+   *  逆に凍結中にこれが1行も出なければイベント自体が止まっている = 世界B（SDK/サービスのストール）。 */
+  private logNoMatchThrottled(): void {
+    const now = Date.now();
+    if (now - this.lastNoMatchLogAt < TranscriptionSession.NOMATCH_LOG_INTERVAL_MS) return;
+    this.lastNoMatchLogAt = now;
+    logWarn("transcription.recognized", "NoMatch: audio reaching SDK but not recognized", {
+      recognizedCount: this.recognizedTexts.length,
+      reconnectCount: this.reconnectCount,
+    });
   }
 
   /** recognizer を安全に閉じて null にする。close() の throwIfDisposed を吸収する。 */
@@ -182,6 +204,7 @@ export class TranscriptionSession {
     const recognizer = new SDK.SpeechRecognizer(speechConfig, audioConfig);
 
     recognizer.recognizing = (_, e) => {
+      this.lastEventAt = Date.now();
       if (e.result.text) {
         this.lastInterimText = e.result.text;
         this.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
@@ -189,6 +212,7 @@ export class TranscriptionSession {
     };
 
     recognizer.recognized = (_, e) => {
+      this.lastEventAt = Date.now();
       if (
         e.result.reason === SDK.ResultReason.RecognizedSpeech &&
         e.result.text
@@ -196,6 +220,8 @@ export class TranscriptionSession {
         this.recognizedTexts.push(e.result.text);
         this.lastInterimText = "";
         this.onInterimResult?.(this.recognizedTexts.join(""));
+      } else if (e.result.reason === SDK.ResultReason.NoMatch) {
+        this.logNoMatchThrottled();
       }
     };
 
@@ -374,12 +400,16 @@ export class TranscriptionSession {
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
+      // 最後の SDK イベントからの経過時間。大きい＝録音中にイベントが止まっていた（凍結）痕跡。
+      const sinceLastEventMs = this.lastEventAt ? Date.now() - this.lastEventAt : -1;
+
       const finalText = this.recognizedTexts.join("");
       if (finalText) {
         logInfo("transcription.stop", "azure-speech final text ready", {
           recognizedCount: this.recognizedTexts.length,
           finalLen: finalText.length,
           reconnectCount: this.reconnectCount,
+          sinceLastEventMs,
         });
         return finalText;
       }
@@ -387,6 +417,7 @@ export class TranscriptionSession {
         logWarn("transcription.stop", "azure-speech interim fallback used", {
           interimLen: this.lastInterimText.length,
           reconnectCount: this.reconnectCount,
+          sinceLastEventMs,
         });
         return this.lastInterimText;
       }
@@ -395,6 +426,7 @@ export class TranscriptionSession {
         peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
         wasSilent: this.wasSilent,
         reconnectCount: this.reconnectCount,
+        sinceLastEventMs,
       });
       return "";
     }
