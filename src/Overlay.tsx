@@ -316,7 +316,7 @@ export default function Overlay() {
         listen("recording-stop", () => controller.keyUp()),
         // 処理中の Esc（低レベルフックが消費したもの）だけが届く
         listen("recording-cancel", () => controller.cancel()),
-        // トレイ「ログを開く」から発火。設定済みフォルダ（空ならデフォルト）を Rust で開く
+        // トレイ「履歴ログを開く」から発火。設定済みフォルダ（空ならデフォルト）を Rust で開く
         listen("open-log-folder", () => {
           const logFolder = loadSettings().logFolder.trim();
           invoke("open_log_folder", { folder: logFolder }).catch((e) =>
