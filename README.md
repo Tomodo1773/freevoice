@@ -187,7 +187,7 @@ Ctrl+Shift+Space 長押し
 | 後処理プロバイダー | Azure OpenAI | Azure OpenAI / OpenAI |
 | 後処理エンドポイント | （空） | 後処理用の v1 エンドポイント URL（Azure 選択時のみ） |
 | 後処理 API Key | （空） | 後処理用 API キー（暗号化保管） |
-| 後処理モデル | `gpt-5.2` | テキスト整形に使用するモデル |
+| 後処理モデル | `gpt-5.6-terra` | テキスト整形に使用するモデル |
 | Reasoning Effort | `low` | 後処理モデルの推論強度（none/low/medium/high） |
 | LangSmith API Key | （空） | LangSmith トレーシング用（任意） |
 | LangSmith Project | （空） | LangSmith のプロジェクト名（任意） |
