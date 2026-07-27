@@ -80,6 +80,17 @@ body {
   resize: none;
 }
 
+.default-prompt-dialog {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.default-prompt-preview {
+  min-height: min(520px, 55vh);
+  max-height: 55vh;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
 .settings-actions {
   justify-content: flex-end;
   align-items: center;

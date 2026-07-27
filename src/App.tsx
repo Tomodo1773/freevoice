@@ -8,6 +8,7 @@ import {
   Box,
   Button,
   Callout,
+  Dialog,
   Flex,
   Heading,
   Select,
@@ -19,7 +20,15 @@ import {
 } from "@radix-ui/themes";
 import History from "./History";
 import { useSettings } from "./useSettings";
-import { AppSettings, FormatProvider, InputMethod, LangsmithRegion, ReasoningEffort, TranscriptionProvider } from "./types";
+import {
+  AppSettings,
+  DEFAULT_POSTPROCESS_PROMPT,
+  FormatProvider,
+  InputMethod,
+  LangsmithRegion,
+  ReasoningEffort,
+  TranscriptionProvider,
+} from "./types";
 import { buildFormatRequest } from "./postprocess";
 import { logWarn, logError } from "./diagLog";
 
@@ -59,6 +68,8 @@ export default function App() {
   const [page, setPage] = useState<"basic" | "model" | "prompt" | "history">("basic");
   const [version, setVersion] = useState("");
   const [defaultLogDir, setDefaultLogDir] = useState("");
+  const [defaultPromptCopyStatus, setDefaultPromptCopyStatus] =
+    useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
     migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey }) => {
@@ -117,6 +128,17 @@ export default function App() {
     }
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
+  };
+
+  const handleCopyDefaultPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(DEFAULT_POSTPROCESS_PROMPT);
+      setDefaultPromptCopyStatus("copied");
+      setTimeout(() => setDefaultPromptCopyStatus("idle"), 1500);
+    } catch (e) {
+      logError("app.copyDefaultPrompt", "clipboard write failed", e);
+      setDefaultPromptCopyStatus("error");
+    }
   };
 
   const isOpenai = form.formatProvider === "openai";
@@ -679,9 +701,49 @@ export default function App() {
 
           {page === "prompt" && (
             <Flex direction="column" gap="2" style={{ height: "100%" }}>
-              <Text as="label" className="field-label" htmlFor="postprocessPrompt">
-                フォーマット用プロンプト
-              </Text>
+              <Flex justify="between" align="center">
+                <Text as="label" className="field-label" htmlFor="postprocessPrompt">
+                  フォーマット用プロンプト
+                </Text>
+                <Dialog.Root
+                  onOpenChange={(open) => {
+                    if (!open) setDefaultPromptCopyStatus("idle");
+                  }}
+                >
+                  <Dialog.Trigger>
+                    <Button size="1" variant="soft">
+                      最新のデフォルトを表示
+                    </Button>
+                  </Dialog.Trigger>
+                  <Dialog.Content className="default-prompt-dialog">
+                    <Dialog.Title>最新のデフォルトプロンプト</Dialog.Title>
+                    <Dialog.Description size="2" color="gray" mb="3">
+                      このアプリに組み込まれている最新のデフォルトです。現在の設定は変更されません。
+                    </Dialog.Description>
+                    <TextArea
+                      className="default-prompt-preview"
+                      value={DEFAULT_POSTPROCESS_PROMPT}
+                      readOnly
+                      aria-label="最新のデフォルトプロンプト"
+                    />
+                    {defaultPromptCopyStatus === "error" && (
+                      <Text size="2" color="red" mt="2">
+                        コピーに失敗しました。テキストを選択してコピーしてください。
+                      </Text>
+                    )}
+                    <Flex gap="3" mt="4" justify="end">
+                      <Dialog.Close>
+                        <Button variant="soft" color="gray">閉じる</Button>
+                      </Dialog.Close>
+                      <Button onClick={handleCopyDefaultPrompt}>
+                        {defaultPromptCopyStatus === "copied"
+                          ? "コピーしました"
+                          : "クリップボードにコピー"}
+                      </Button>
+                    </Flex>
+                  </Dialog.Content>
+                </Dialog.Root>
+              </Flex>
               <TextArea
                 className="prompt-textarea"
                 id="postprocessPrompt"

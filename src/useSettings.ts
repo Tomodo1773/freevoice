@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { resolveAzureOpenAIBase } from "./azureOpenaiEndpoint";
-import { AppSettings, DEFAULT_SETTINGS } from "./types";
+import {
+  AppSettings,
+  DEFAULT_SETTINGS,
+  LEGACY_DEFAULT_POSTPROCESS_PROMPT,
+} from "./types";
 import { logError } from "./diagLog";
 
 const STORAGE_KEY = "freevoice-settings";
@@ -8,6 +12,9 @@ const STORAGE_KEY = "freevoice-settings";
 function normalizeSettings(raw: Partial<AppSettings> & { postprocessModel?: string }): AppSettings {
   const merged = { ...DEFAULT_SETTINGS, ...raw };
   if (!merged.postprocessPrompt?.trim()) {
+    merged.postprocessPrompt = DEFAULT_SETTINGS.postprocessPrompt;
+  } else if (merged.postprocessPrompt === LEGACY_DEFAULT_POSTPROCESS_PROMPT) {
+    // ユーザーが編集していない旧デフォルトだけを新しい内容へ更新する。
     merged.postprocessPrompt = DEFAULT_SETTINGS.postprocessPrompt;
   }
   // マイグレーション: 既存ユーザーの共用endpointからformatEndpointを導出
