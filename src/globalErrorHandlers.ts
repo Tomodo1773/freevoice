@@ -28,6 +28,19 @@ export function installGlobalErrorLogging(scope: string): void {
     logError(`global.${scope}`, "unhandled promise rejection", event.reason);
   });
 
+  // CSP に阻まれた読み込み・実行。ブロックは例外にならないため error にも
+  // unhandledrejection にも現れず、この保険が無いとどこにも記録されない。
+  // ライブラリが違反を握り潰して別経路へフォールバックする場合、記録が無いと
+  // 「なぜか挙動が違う」という結果だけが残り、原因を追えない。
+  document.addEventListener("securitypolicyviolation", (event) => {
+    logError(`global.${scope}`, "CSP violation blocked a resource", event.violatedDirective, {
+      blockedURI: event.blockedURI,
+      disposition: event.disposition,
+      sourceFile: event.sourceFile,
+      lineNumber: event.lineNumber,
+    });
+  });
+
   // 保険が有効になったことをマーカーとして残す（以降の記録の起点になる）。
   logInfo(`global.${scope}`, "global error handlers installed");
 }

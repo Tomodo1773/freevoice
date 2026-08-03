@@ -68,6 +68,18 @@ export class TranscriptionSession {
   /** NoMatch ログのスロットル用。連発する NoMatch を一定間隔に間引く。 */
   private lastNoMatchLogAt = 0;
 
+  /* --- ここから調査用。原因が確定したら削除する ---
+   * recognizing/recognized/canceled/sessionStopped はすべて SDK の受信ループ経由で届く。
+   * 受信ループが死ぬと全部同時に止まるため、アプリからは「送信が止まった」のか
+   * 「受信が止まった」のか区別できない。WebSocket の生の送受信カウンタだけが
+   * この2つを外から見分けられる。 */
+  private sentCount = 0;
+  private recvCount = 0;
+  private lastSentAt = 0;
+  private lastRecvAt = 0;
+  private disconnectCount = 0;
+  /* --- 調査用ここまで --- */
+
   private stopping = false;
   /** 初回 startRecognizer 成功後にのみ true。start() 中の canceled+reject 二重発火によるリークを防ぐ。 */
   private reconnectEnabled = false;
@@ -142,6 +154,12 @@ export class TranscriptionSession {
       this.stopping = false;
       this.reconnectEnabled = false;
       this.reconnectCount = 0;
+      // 調査用カウンタのリセット（原因確定後に削除）
+      this.sentCount = 0;
+      this.recvCount = 0;
+      this.lastSentAt = 0;
+      this.lastRecvAt = 0;
+      this.disconnectCount = 0;
       await this.startRecognizer();
       if (this.closed) {
         this.closeRecognizer();
@@ -290,6 +308,28 @@ export class TranscriptionSession {
       });
     };
 
+    /* --- 調査用。原因が確定したら削除する ---
+     * 受信ループとは独立したイベントバス経由で届くため、受信ループが死んでも生き残る。 */
+    const connection = SDK.Connection.fromRecognizer(recognizer);
+    connection.messageSent = () => {
+      this.sentCount++;
+      this.lastSentAt = Date.now();
+    };
+    connection.messageReceived = () => {
+      this.recvCount++;
+      this.lastRecvAt = Date.now();
+    };
+    connection.disconnected = () => {
+      this.disconnectCount++;
+      if (this.stopping) return;
+      logWarn("transcription.connection", "websocket disconnected mid-recording", {
+        disconnectCount: this.disconnectCount,
+        sentCount: this.sentCount,
+        recvCount: this.recvCount,
+      });
+    };
+    /* --- 調査用ここまで --- */
+
     this.recognizer = recognizer;
 
     await new Promise<void>((resolve, reject) => {
@@ -401,7 +441,19 @@ export class TranscriptionSession {
       // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
       // 最後の SDK イベントからの経過時間。大きい＝録音中にイベントが止まっていた（凍結）痕跡。
-      const sinceLastEventMs = this.lastEventAt ? Date.now() - this.lastEventAt : -1;
+      const now = Date.now();
+      const sinceLastEventMs = this.lastEventAt ? now - this.lastEventAt : -1;
+
+      /* --- 調査用。原因が確定したら削除する ---
+       * sinceLastSentMs が大きい = アプリから Azure への送信が止まっていた
+       * sinceLastSentMs は小さいのに sinceLastRecvMs が大きい = 受信側だけが止まっていた */
+      const conn = {
+        sentCount: this.sentCount,
+        recvCount: this.recvCount,
+        sinceLastSentMs: this.lastSentAt ? now - this.lastSentAt : -1,
+        sinceLastRecvMs: this.lastRecvAt ? now - this.lastRecvAt : -1,
+        disconnectCount: this.disconnectCount,
+      };
 
       const finalText = this.recognizedTexts.join("");
       if (finalText) {
@@ -410,6 +462,7 @@ export class TranscriptionSession {
           finalLen: finalText.length,
           reconnectCount: this.reconnectCount,
           sinceLastEventMs,
+          ...conn,
         });
         return finalText;
       }
@@ -418,6 +471,7 @@ export class TranscriptionSession {
           interimLen: this.lastInterimText.length,
           reconnectCount: this.reconnectCount,
           sinceLastEventMs,
+          ...conn,
         });
         return this.lastInterimText;
       }
@@ -427,6 +481,7 @@ export class TranscriptionSession {
         wasSilent: this.wasSilent,
         reconnectCount: this.reconnectCount,
         sinceLastEventMs,
+        ...conn,
       });
       return "";
     }
