@@ -214,6 +214,8 @@ export class TranscriptionSession {
       this.apiKey
     );
     speechConfig.speechRecognitionLanguage = this.speechLanguage || "ja-JP";
+    // Tauri の CSP が SDK の data: Worker タイマーを遮断すると送信ループが停止する。
+    speechConfig.setProperty(SDK.PropertyId.WebWorkerLoadType, "off");
 
     const audioConfig = this.audioDeviceId
       ? SDK.AudioConfig.fromMicrophoneInput(this.audioDeviceId)
