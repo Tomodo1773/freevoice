@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# AI向け指示ファイルとスキルフォルダの同期を検証する。
+# ローカルではpre-commit hookとして、CIでは同じスクリプトを直接実行する。
+# Git以外の外部コマンドには依存しない。
+
+set -u
+
+status=0
+
+agents_oid=$(git rev-parse --verify :AGENTS.md 2>/dev/null || :)
+claude_oid=$(git rev-parse --verify :CLAUDE.md 2>/dev/null || :)
+
+if [ -z "$agents_oid" ] || [ -z "$claude_oid" ]; then
+  echo "同期エラー: AGENTS.md と CLAUDE.md の両方が必要です。" >&2
+  status=1
+elif [ "$agents_oid" != "$claude_oid" ]; then
+  echo "同期エラー: AGENTS.md と CLAUDE.md の内容が一致しません。" >&2
+  status=1
+fi
+
+tree=$(git write-tree) || {
+  echo "同期チェック用のtreeを作成できませんでした。" >&2
+  exit 2
+}
+
+agents_skills=$(git rev-parse --verify "$tree:.agents/skills" 2>/dev/null || :)
+claude_skills=$(git rev-parse --verify "$tree:.claude/skills" 2>/dev/null || :)
+
+if [ "$agents_skills" != "$claude_skills" ]; then
+  echo "同期エラー: .agents/skills と .claude/skills の内容が一致しません。" >&2
+  status=1
+fi
+
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+
+echo "両側を同じ内容に揃えてから、もう一度コミットしてください。" >&2
+git diff --cached --name-status -- AGENTS.md CLAUDE.md .agents/skills .claude/skills >&2
+exit 1
