@@ -59,4 +59,4 @@ pnpm tsc --noEmit
 
 `AGENTS.md` と `CLAUDE.md`、`.agents/skills` と `.claude/skills` は、それぞれ同じ内容の別実体として管理する。シンボリックリンクにはしない（Windowsで `git worktree` が失敗するため）。片方だけを変更せず、両方を同じ内容に揃えてコミットする。
 
-クローン後に `git config core.hooksPath .githooks` を実行すると、コミット時に一致を検証する。CIでも同じ検証を行う。
+クローン後に `git config core.hooksPath .githooks` を実行し、コミット時の検証を有効にする。CIでも同じ検証を行う。
