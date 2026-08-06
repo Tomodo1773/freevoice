@@ -1,4 +1,4 @@
-# CLAUDE.md
+# FreeVoice
 
 ## 言語設定
 
@@ -54,3 +54,9 @@ pnpm tsc --noEmit
 ### フロントエンド / Rust の責務分担
 
 ロジックは可能な限り全てフロントエンドに、Rust で書く内容は最小限にする。
+
+## 指示ファイルの同期
+
+`AGENTS.md` と `CLAUDE.md`、`.agents/skills` と `.claude/skills` は同じ内容の別実体。片方を変更したら、もう一方も同じ内容に揃える。
+
+クローン後に `git config core.hooksPath .githooks` を実行する。
