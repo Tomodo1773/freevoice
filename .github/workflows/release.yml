@@ -32,6 +32,7 @@ jobs:
           mode: firewall
 
       - name: Install frontend deps
+        shell: bash
         run: sfw pnpm install --frozen-lockfile
 
       - name: Set version from tag
