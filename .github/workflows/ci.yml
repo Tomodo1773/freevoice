@@ -52,11 +52,19 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Fetch Rust dependencies
+        shell: bash
+        env:
+          # Socket Firewall's proxy CA has no reachable revocation status on Windows.
+          # Other TLS certificate checks remain enabled.
+          CARGO_HTTP_CHECK_REVOKE: 'false'
+        run: sfw cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
       - name: Cargo check
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        run: cargo check --frozen --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Cargo build
-        run: cargo build --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        run: cargo build --frozen --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        run: cargo test --frozen --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
