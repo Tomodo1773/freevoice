@@ -53,10 +53,13 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Cargo check
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        shell: bash
+        run: sfw cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Cargo build
-        run: cargo build --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        shell: bash
+        run: sfw cargo build --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        shell: bash
+        run: sfw cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
