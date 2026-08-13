@@ -62,7 +62,9 @@ export interface LogData {
 
 /** 録音制御が呼ぶ表示側の窓口。制御と表示を分離し、表示の遅延/フェードは実装側に閉じ込める。 */
 export interface RecorderView {
-  /** 録音の見た目を出す（ウィンドウ表示＋「Recording」ピル）。開始直後に即呼ぶ。 */
+  /** 開始準備の見た目を出す（ウィンドウ表示＋「Preparing」ピル）。 */
+  starting(): void;
+  /** 音声認識の開始完了後に「Recording」へ切り替える。 */
   recording(): void;
   /** リアルタイム文字起こしの更新。 */
   transcript(text: string): void;
@@ -204,6 +206,7 @@ export class RecordingJob {
   phase: JobPhase = "starting";
 
   private readonly abort = new AbortController();
+  private mic: MediaStream | null = null;
   private session: ActiveSession | null = null;
   private acceptsSessionCallbacks = true;
 
@@ -236,9 +239,18 @@ export class RecordingJob {
     this.stopResolve(signal);
   }
 
+  /** ジョブが所有するマイクを一度だけ停止する。finally からの重複呼び出しも安全。 */
+  private releaseMic(): void {
+    const mic = this.mic;
+    this.mic = null;
+    if (mic) stopMediaStream(mic);
+  }
+
   async run(): Promise<JobResult> {
-    this.deps.view.recording();
+    this.deps.view.starting();
     const deadline = new StartDeadline(this.deps.startTimeoutMs);
+    // 開始音はマイク取得前に鳴らす。認識開始後はシステム音をミュートしているため、
+    // ここでは「ホットキーを受け付けた」通知として従来どおり扱う。
     try {
       this.deps.beep();
     } catch (e) {
@@ -246,7 +258,6 @@ export class RecordingJob {
     }
 
     let config: RecordingConfig | null = null;
-    let mic: MediaStream | null = null;
     try {
       config = await deadline.wait(this.deps.loadConfig());
       // 文脈スコープ用のフォアグラウンドウィンドウ取得は録音と並行させ、貼り付け直前に解決する。
@@ -257,9 +268,9 @@ export class RecordingJob {
           })
         : Promise.resolve<RecordingWindow | null>(null);
 
-      mic = await deadline.acquire(this.deps.acquireMic(config), stopMediaStream);
+      this.mic = await deadline.acquire(this.deps.acquireMic(config), stopMediaStream);
 
-      const stop = await this.recordUntilStop(mic, config, deadline);
+      const stop = await this.recordUntilStop(this.mic, config, deadline);
       if (stop.reason === "recognition-error") {
         return {
           kind: "error",
@@ -273,7 +284,7 @@ export class RecordingJob {
       }
 
       this.phase = "processing";
-      // キャンセル可能区間の開始。マイクなどと同じくジョブが所有し、finally で必ず閉じる。
+      // キャンセル可能区間の開始。所有リソースは各処理の完了時に解放し、finally を最後の砦にする。
       this.deps.setCancelable(true);
       return await this.process(config, windowPromise);
     } catch (e) {
@@ -303,7 +314,7 @@ export class RecordingJob {
           logWarn("recorder.run", "leftover session cleanup failed", { error: e })
         );
       }
-      if (mic) stopMediaStream(mic);
+      this.releaseMic();
     }
   }
 
@@ -339,6 +350,11 @@ export class RecordingJob {
       this.session = pending.session;
       await deadline.wait(pending.ready);
       this.phase = "recording";
+      // 準備完了前にキーを離していた場合、実際に録音する時間は無いので
+      // Recording 表示を出さず、そのまま停止処理へ進める。
+      if (!this.stopSettled) {
+        this.deps.view.recording();
+      }
       logInfo("recorder.recordUntilStop", "recording", {
         provider: config.settings.transcriptionProvider,
       });
@@ -379,7 +395,10 @@ export class RecordingJob {
       },
     });
     try {
-      [raw, win] = await Promise.all([session.stop(signal), windowPromise]);
+      // 認識の停止完了まではマイクを生かし、完了した瞬間に所有者であるジョブが解放する。
+      // windowPromise や後続の整形APIを待つ間までマイクを保持しない。
+      const transcriptPromise = session.stop(signal).finally(() => this.releaseMic());
+      [raw, win] = await Promise.all([transcriptPromise, windowPromise]);
       context = win ? this.deps.getContext(win.id) : null;
       if (!raw.trim()) {
         const log = session.wasSilent ? logInfo : logWarn;

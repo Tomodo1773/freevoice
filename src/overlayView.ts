@@ -7,6 +7,7 @@ import type { RecorderView } from "./recorder";
  */
 export type OverlayStatus =
   | "hidden"
+  | "starting"
   | "recording"
   | "transcribing"
   | "formatting"
@@ -86,10 +87,10 @@ export class OverlayView implements RecorderView {
     }, ms);
   }
 
-  recording(): void {
+  starting(): void {
     this.clearTimers();
     this.set({
-      status: "recording",
+      status: "starting",
       transcript: "",
       errorMsg: "",
       fallback: false,
@@ -97,6 +98,10 @@ export class OverlayView implements RecorderView {
       fading: false,
     });
     this.deps.showWindow();
+  }
+
+  recording(): void {
+    this.set({ status: "recording" });
   }
 
   transcript(text: string): void {

@@ -96,7 +96,6 @@ function createTranscriptionSession(
     model: s.transcriptionModel,
     speechEndpoint: s.speechEndpoint,
     speechLanguage: s.speechLanguage,
-    audioDeviceId: config.effectiveDeviceId,
     mediaStream: mic,
     onInterimResult: callbacks.onInterim,
     onRecognitionError: callbacks.onError,
@@ -379,7 +378,7 @@ export default function Overlay() {
   }, [transcript]);
 
   // empty（無音終端）は表示上は recording と同じ「listening」系で扱い、現行の見た目を温存する。
-  const isRecordingLike = status === "recording" || status === "empty";
+  const isRecordingLike = status === "starting" || status === "recording" || status === "empty";
 
   // status から既存 CSS クラス名へのマッピング（CSS変更不要にする）
   const cssStatus = isRecordingLike || status === "hidden" ? "listening" : status;
@@ -389,6 +388,7 @@ export default function Overlay() {
     .join(" ");
 
   const icon =
+    status === "starting" ? <span className="spinner">◌</span> :
     isRecordingLike ? "●" :
     (status === "transcribing" || status === "formatting") ? <span className="spinner">◌</span> :
     status === "done" ? "✓" :
@@ -396,7 +396,9 @@ export default function Overlay() {
     null;
 
   const statusLabel =
-    isRecordingLike
+    status === "starting"
+      ? "Preparing"
+      : isRecordingLike
       ? "Recording"
       : status === "transcribing"
       ? "Transcribing"
@@ -409,7 +411,9 @@ export default function Overlay() {
       : "";
 
   const text =
-    isRecordingLike
+    status === "starting"
+      ? "Preparing..."
+      : isRecordingLike
       ? transcript || (silentWarn ? "Microphone input may be silent" : "Listening...")
       : status === "transcribing"
       ? "Transcribing..."
