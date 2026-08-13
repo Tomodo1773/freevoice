@@ -52,7 +52,6 @@ export class TranscriptionSession {
   private model = "";
   private speechEndpoint = "";
   private speechLanguage = "";
-  private audioDeviceId = "";
   private onInterimResult?: (text: string) => void;
   private onRecognitionError?: (message: string) => void;
 
@@ -95,8 +94,7 @@ export class TranscriptionSession {
     model: string;
     speechEndpoint: string;
     speechLanguage: string;
-    audioDeviceId?: string;
-    mediaStream?: MediaStream;
+    mediaStream: MediaStream;
     onInterimResult?: (text: string) => void;
     onRecognitionError?: (message: string) => void;
   }): Promise<void> {
@@ -107,7 +105,6 @@ export class TranscriptionSession {
     this.model = params.model;
     this.speechEndpoint = params.speechEndpoint;
     this.speechLanguage = params.speechLanguage;
-    this.audioDeviceId = params.audioDeviceId ?? "";
     this.onInterimResult = params.onInterimResult;
     this.onRecognitionError = params.onRecognitionError;
 
@@ -119,19 +116,10 @@ export class TranscriptionSession {
       if (!this.speechEndpoint) throw new Error("Speech エンドポイントが未設定です");
     }
 
-    // 全プロバイダー共通: VU メーター用にマイク取得（外部から渡された場合は再利用）
-    const mediaStream =
-      params.mediaStream ??
-      (await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          noiseSuppression: true,
-          echoCancellation: true,
-          ...(params.audioDeviceId ? { deviceId: { exact: params.audioDeviceId } } : {}),
-        },
-      }));
+    // マイクは RecordingJob が一度だけ取得して所有する。セッションは同じストリームを
+    // VU メーターと文字起こしの両方で消費し、二重の getUserMedia を行わない。
+    const mediaStream = params.mediaStream;
     if (this.closed) {
-      mediaStream.getTracks().forEach((track) => track.stop());
       throw new DOMException("session closed", "AbortError");
     }
     this.mediaStream = mediaStream;
@@ -217,9 +205,8 @@ export class TranscriptionSession {
     // Tauri の CSP が SDK の data: Worker タイマーを遮断すると送信ループが停止する。
     speechConfig.setProperty(SDK.PropertyId.WebWorkerLoadType, "off");
 
-    const audioConfig = this.audioDeviceId
-      ? SDK.AudioConfig.fromMicrophoneInput(this.audioDeviceId)
-      : SDK.AudioConfig.fromDefaultMicrophoneInput();
+    // SDK はこの共有ストリームを停止しない。停止責務は RecordingJob の finally にある。
+    const audioConfig = SDK.AudioConfig.fromStreamInput(this.mediaStream!);
 
     const recognizer = new SDK.SpeechRecognizer(speechConfig, audioConfig);
 
@@ -395,11 +382,10 @@ export class TranscriptionSession {
     return this.peakAudioLevel < TranscriptionSession.SILENCE_THRESHOLD;
   }
 
-  /** mediaStream / analyser / audioContext を解放する。
+  /** analyser / audioContext を解放する。
    *  audioContext.close() は await せず投げっぱなしにして return を遅らせない。
-   *  解放対象は確定済みの最終テキストに影響せず、次回録音は新しい AudioContext を作る。 */
+   *  マイクの停止は RecordingJob の finally だけが行う。 */
   private releaseAudioResources(): void {
-    this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
     this.analyser = null;
     if (this.audioContext) {

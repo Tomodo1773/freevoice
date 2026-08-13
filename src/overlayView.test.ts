@@ -12,8 +12,16 @@ describe("OverlayView", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("recording() でウィンドウを表示し status=recording にする", () => {
+  it("starting() でウィンドウを表示し status=starting にする", () => {
     const { view, showWindow } = makeView();
+    view.starting();
+    expect(view.getState().status).toBe("starting");
+    expect(showWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("recording() は表示済みの Preparing を Recording に切り替える", () => {
+    const { view, showWindow } = makeView();
+    view.starting();
     view.recording();
     expect(view.getState().status).toBe("recording");
     expect(showWindow).toHaveBeenCalledTimes(1);
@@ -79,19 +87,19 @@ describe("OverlayView", () => {
     expect(view.getState().status).toBe("hidden");
   });
 
-  it("トースト表示中に新しい recording() が来ると、保留中の非表示をキャンセルする", () => {
+  it("トースト表示中に新しい starting() が来ると、保留中の非表示をキャンセルする", () => {
     const { view, showWindow, hideWindow } = makeView();
-    view.recording();
+    view.starting();
     view.done(false, "");
     vi.advanceTimersByTime(500); // linger 途中
-    view.recording(); // 次の録音開始
-    expect(view.getState().status).toBe("recording");
+    view.starting(); // 次の録音開始
+    expect(view.getState().status).toBe("starting");
     expect(showWindow).toHaveBeenCalledTimes(2);
 
     // 元の done のタイマーが残って隠さないことを確認
     vi.advanceTimersByTime(2000);
     expect(hideWindow).not.toHaveBeenCalled();
-    expect(view.getState().status).toBe("recording");
+    expect(view.getState().status).toBe("starting");
   });
 
   it("フェード完了後に late な transcript() が来ても hidden のまま無視する", () => {
