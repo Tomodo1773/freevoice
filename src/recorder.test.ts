@@ -32,6 +32,7 @@ async function settle(rounds = 6): Promise<void> {
 function makeView() {
   const calls: string[] = [];
   const view: RecorderView = {
+    starting: () => void calls.push("starting"),
     recording: () => void calls.push("recording"),
     transcript: (t) => void calls.push(`transcript:${t}`),
     transcribing: () => void calls.push("transcribing"),
@@ -48,6 +49,7 @@ interface Harness {
   controller: RecorderController;
   deps: RecorderDeps;
   calls: string[];
+  getBeepCalls: () => number;
   muteCalls: boolean[];
   cancelableCalls: boolean[];
   pasteCalls: string[];
@@ -60,6 +62,7 @@ interface Harness {
 
 function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): Harness {
   const { view, calls } = makeView();
+  let beepCalls = 0;
   const muteCalls: boolean[] = [];
   const cancelableCalls: boolean[] = [];
   const pasteCalls: string[] = [];
@@ -86,7 +89,9 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
     view,
     now: () => new Date(0),
     startTimeoutMs: 10000,
-    beep: () => {},
+    beep: () => {
+      beepCalls++;
+    },
     loadConfig: async () => config,
     resolveWindow: async () => null,
     acquireMic: async () => mic,
@@ -108,6 +113,7 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
     controller: new RecorderController(deps),
     deps,
     calls,
+    getBeepCalls: () => beepCalls,
     muteCalls,
     cancelableCalls,
     pasteCalls,
@@ -128,12 +134,14 @@ describe("RecorderController / RecordingJob", () => {
       h.controller.keyDown();
       await settle();
       expect(h.calls).toContain("recording");
+      expect(h.getBeepCalls()).toBe(1);
       expect(h.controller.isRecording).toBe(true);
 
       h.controller.keyUp();
       await settle();
 
       expect(h.calls).toEqual([
+        "starting",
         "recording",
         "transcribing",
         "transcript:こんにちは",
@@ -142,6 +150,7 @@ describe("RecorderController / RecordingJob", () => {
       ]);
       expect(h.pasteCalls).toEqual(["こんにちは(整形)"]);
       expect(h.muteCalls).toEqual([true, false]);
+      expect(h.getBeepCalls()).toBe(1);
       expect(h.micTrackStop).toHaveBeenCalled();
     });
 
@@ -210,6 +219,14 @@ describe("RecorderController / RecordingJob", () => {
 
       expect(h.pasteCalls).toEqual(["やあ(整形)"]);
       expect(h.muteCalls).toEqual([true, false]);
+      expect(h.getBeepCalls()).toBe(1);
+      expect(h.calls).toEqual([
+        "starting",
+        "transcribing",
+        "transcript:やあ",
+        "formatting",
+        "done:false:",
+      ]);
     });
   });
 
@@ -261,6 +278,16 @@ describe("RecorderController / RecordingJob", () => {
 
       expect(h.calls).toContain("cancelled");
       expect(h.pasteCalls).toEqual([]);
+    });
+
+    it("整形処理を待っている間は既にマイクを解放している", async () => {
+      const { h, formatGate } = await stalledInFormatting();
+
+      expect(h.micTrackStop).toHaveBeenCalledTimes(1);
+
+      formatGate.resolve({ text: "こんにちは(整形)", fallback: false, fallbackReason: "" });
+      await settle();
+      expect(h.micTrackStop).toHaveBeenCalledTimes(1);
     });
 
     it("処理中の keyDown はキャンセルも新規録音もしない", async () => {
