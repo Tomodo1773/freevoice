@@ -10,7 +10,7 @@ updates:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
-      semver-patch-days: 3
+      semver-patch-days: 7
     groups:
       # version-updatesを1つのPRにグループ化
       npm-version:
@@ -40,7 +40,7 @@ updates:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
-      semver-patch-days: 3
+      semver-patch-days: 7
     groups:
       # version-updatesを1つのPRにグループ化
       cargo-version:
