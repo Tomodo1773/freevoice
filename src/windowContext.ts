@@ -1,6 +1,7 @@
 import { buildFormatRequest, ChatMessage, PostprocessError, PostprocessUsage, requestChatCompletion } from "./postprocess";
 import { LangsmithConfig, sendLlmSpan } from "./langsmithTrace";
-import { FormatProvider, ReasoningEffort } from "./types";
+import { FormatProvider } from "./formatProvider";
+import { ReasoningEffort } from "./types";
 import { logInfo, logWarn } from "./diagLog";
 
 /** ウィンドウ（hwnd）ごとの話題コンテキスト。

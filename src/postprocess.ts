@@ -1,4 +1,5 @@
-import { DEFAULT_SETTINGS, FormatProvider, ReasoningEffort } from "./types";
+import { FORMAT_PROVIDERS, FormatProvider, resolveFormatBaseUrl } from "./formatProvider";
+import { DEFAULT_SETTINGS, ReasoningEffort } from "./types";
 import { logWarn } from "./diagLog";
 
 export class PostprocessError extends Error {
@@ -38,12 +39,7 @@ export function buildFormatUrl(
   formatProvider: FormatProvider,
   endpoint: string,
 ): string {
-  const base = formatProvider === "openai"
-    ? "https://api.openai.com/v1"
-    : endpoint.replace(/\/+$/, "");
-  return formatProvider === "azure"
-    ? `${base}/openai/v1/chat/completions`
-    : `${base}/chat/completions`;
+  return `${resolveFormatBaseUrl(formatProvider, endpoint)}/chat/completions`;
 }
 
 export function buildFormatRequest(
@@ -55,7 +51,7 @@ export function buildFormatRequest(
     url: buildFormatUrl(formatProvider, endpoint),
     headers: {
       "Content-Type": "application/json",
-      ...(formatProvider === "openai"
+      ...(FORMAT_PROVIDERS[formatProvider].auth === "bearer"
         ? { Authorization: `Bearer ${apiKey}` }
         : { "api-key": apiKey }),
     },

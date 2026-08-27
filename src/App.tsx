@@ -3,7 +3,15 @@ import appIcon from "../src-tauri/icons/128x128.png";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { setApiKey, setAzureFormatApiKey, setOpenaiFormatApiKey, setLangsmithApiKey, getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
+import {
+  setApiKey,
+  setFormatApiKeys,
+  setLangsmithApiKey,
+  getAllApiKeys,
+  migrateFormatApiKey,
+  emptyFormatApiKeys,
+  type FormatApiKeys,
+} from "./apiKeyStore";
 import {
   Box,
   Button,
@@ -21,9 +29,14 @@ import {
 import History from "./History";
 import { useSettings } from "./useSettings";
 import {
+  FORMAT_PROVIDERS,
+  FORMAT_PROVIDER_ORDER,
+  FormatProvider,
+  needsEndpointInput,
+} from "./formatProvider";
+import {
   AppSettings,
   DEFAULT_POSTPROCESS_PROMPT,
-  FormatProvider,
   InputMethod,
   LangsmithRegion,
   ReasoningEffort,
@@ -54,8 +67,7 @@ export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
   const [apiKeyInput, setApiKeyInput] = useState("");
-  const [azureFormatApiKeyInput, setAzureFormatApiKeyInput] = useState("");
-  const [openaiFormatApiKeyInput, setOpenaiFormatApiKeyInput] = useState("");
+  const [formatApiKeyInputs, setFormatApiKeyInputs] = useState<FormatApiKeys>(emptyFormatApiKeys);
   const [langsmithApiKeyInput, setLangsmithApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
@@ -72,10 +84,9 @@ export default function App() {
     useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
-    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey }) => {
+    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, formatApiKeys, langsmithApiKey }) => {
       if (apiKey) setApiKeyInput(apiKey);
-      if (azureFormatApiKey) setAzureFormatApiKeyInput(azureFormatApiKey);
-      if (openaiFormatApiKey) setOpenaiFormatApiKeyInput(openaiFormatApiKey);
+      setFormatApiKeyInputs(formatApiKeys);
       if (langsmithApiKey) setLangsmithApiKeyInput(langsmithApiKey);
     });
     isEnabled().then(setAutostartEnabled).catch((e) =>
@@ -118,8 +129,7 @@ export default function App() {
   const handleSave = async () => {
     saveSettings(form);
     await setApiKey(apiKeyInput);
-    await setAzureFormatApiKey(azureFormatApiKeyInput);
-    await setOpenaiFormatApiKey(openaiFormatApiKeyInput);
+    await setFormatApiKeys(formatApiKeyInputs);
     await setLangsmithApiKey(langsmithApiKeyInput);
     try {
       await invoke("update_shortcut", { shortcut: form.shortcut });
@@ -141,9 +151,20 @@ export default function App() {
     }
   };
 
-  const isOpenai = form.formatProvider === "openai";
-  const currentFormatApiKey = isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput;
-  const currentFormatModel = isOpenai ? form.openaiFormatModel : form.azureFormatModel;
+  const formatSpec = FORMAT_PROVIDERS[form.formatProvider];
+  const currentFormatApiKey = formatApiKeyInputs[form.formatProvider];
+  const currentFormatModel = form.formatModels[form.formatProvider];
+
+  const handleFormatModelChange = (model: string) => {
+    setForm((prev) => ({
+      ...prev,
+      formatModels: { ...prev.formatModels, [prev.formatProvider]: model },
+    }));
+  };
+
+  const handleFormatApiKeyChange = (key: string) => {
+    setFormatApiKeyInputs((prev) => ({ ...prev, [form.formatProvider]: key }));
+  };
 
   const handleTest = async () => {
     setTestStatus("testing");
@@ -157,7 +178,6 @@ export default function App() {
           model: currentFormatModel,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
-          reasoning_effort: "none",
         }),
       });
       if (res.ok || res.status === 400) {
@@ -500,13 +520,16 @@ export default function App() {
                 >
                   <Select.Trigger id="formatProvider" style={{ width: "100%" }} />
                   <Select.Content>
-                    <Select.Item value="azure">Azure</Select.Item>
-                    <Select.Item value="openai">OpenAI</Select.Item>
+                    {FORMAT_PROVIDER_ORDER.map((provider) => (
+                      <Select.Item key={provider} value={provider}>
+                        {FORMAT_PROVIDERS[provider].label}
+                      </Select.Item>
+                    ))}
                   </Select.Content>
                 </Select.Root>
               </Box>
 
-              {form.formatProvider === "azure" && (
+              {needsEndpointInput(form.formatProvider) && (
                 <Box>
                   <Text as="label" className="field-label" htmlFor="formatEndpoint">
                     エンドポイント
@@ -533,9 +556,9 @@ export default function App() {
                 <TextField.Root
                   id="formatApiKey"
                   type="password"
-                  value={isOpenai ? openaiFormatApiKeyInput : azureFormatApiKeyInput}
-                  onChange={(e) => (isOpenai ? setOpenaiFormatApiKeyInput : setAzureFormatApiKeyInput)(e.target.value)}
-                  placeholder={isOpenai ? "sk-..." : "APIキーを入力"}
+                  value={currentFormatApiKey}
+                  onChange={(e) => handleFormatApiKeyChange(e.target.value)}
+                  placeholder={formatSpec.apiKeyPlaceholder}
                 />
               </Box>
 
@@ -545,9 +568,9 @@ export default function App() {
                 </Text>
                 <TextField.Root
                   id="formatModel"
-                  value={isOpenai ? form.openaiFormatModel : form.azureFormatModel}
-                  onChange={(e) => handleChange(isOpenai ? "openaiFormatModel" : "azureFormatModel", e.target.value)}
-                  placeholder="gpt-5.6-terra"
+                  value={currentFormatModel}
+                  onChange={(e) => handleFormatModelChange(e.target.value)}
+                  placeholder={formatSpec.defaultModel}
                 />
               </Box>
 
@@ -567,6 +590,11 @@ export default function App() {
                     <Select.Item value="high">high</Select.Item>
                   </Select.Content>
                 </Select.Root>
+                {formatSpec.reasoningNote && (
+                  <Text size="1" color="gray" mt="1" as="p">
+                    {formatSpec.reasoningNote}
+                  </Text>
+                )}
               </Box>
 
               <Box>
@@ -690,7 +718,7 @@ export default function App() {
                 <Button
                   variant="soft"
                   onClick={handleTest}
-                  disabled={testStatus === "testing" || (form.formatProvider === "azure" && !form.formatEndpoint) || !currentFormatApiKey}
+                  disabled={testStatus === "testing" || (needsEndpointInput(form.formatProvider) && !form.formatEndpoint) || !currentFormatApiKey}
                 >
                   {testStatus === "testing" ? "テスト中..." : "接続テスト"}
                 </Button>

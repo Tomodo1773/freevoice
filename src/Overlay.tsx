@@ -58,8 +58,8 @@ async function validateAudioDevice(
 
 async function loadConfig(): Promise<RecordingConfig> {
   const initial = loadSettings();
-  const { apiKey, azureFormatApiKey, openaiFormatApiKey, langsmithApiKey } = await getAllApiKeys();
-  const formatApiKey = initial.formatProvider === "openai" ? openaiFormatApiKey : azureFormatApiKey;
+  const { apiKey, formatApiKeys, langsmithApiKey } = await getAllApiKeys();
+  const formatApiKey = formatApiKeys[initial.formatProvider];
   warmupFormatConnection(initial.formatProvider, initial.formatEndpoint);
   const { effectiveDeviceId, settings } = await validateAudioDevice(initial);
   return { settings, apiKey, formatApiKey, langsmithApiKey, effectiveDeviceId };
@@ -104,7 +104,7 @@ function createTranscriptionSession(
 }
 
 function formatModelOf(s: AppSettings): string {
-  return s.formatProvider === "openai" ? s.openaiFormatModel : s.azureFormatModel;
+  return s.formatModels[s.formatProvider];
 }
 
 async function formatText(

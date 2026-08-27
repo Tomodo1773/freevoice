@@ -1,10 +1,10 @@
+import { DEFAULT_FORMAT_MODELS, FormatProvider } from "./formatProvider";
+
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type InputMethod = "clipboard" | "keystroke";
 
 export type TranscriptionProvider = "azure-openai" | "azure-speech";
-
-export type FormatProvider = "azure" | "openai";
 
 export type LangsmithRegion = "us" | "eu";
 
@@ -22,8 +22,8 @@ export interface AppSettings {
   speechEndpoint: string;
   speechLanguage: string;
   audioDeviceId: string;
-  azureFormatModel: string;
-  openaiFormatModel: string;
+  /** 整形モデルはプロバイダーごとに保持し、切り替えても互いを上書きしない */
+  formatModels: Record<FormatProvider, string>;
   langsmithEnabled: boolean;
   langsmithProject: string;
   langsmithRegion: LangsmithRegion;
@@ -88,8 +88,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   shortcut: "Ctrl+Shift+Space",
   endpoint: "",
   transcriptionModel: "gpt-4o-transcribe",
-  azureFormatModel: "gpt-5.6-terra",
-  openaiFormatModel: "gpt-5.6-terra",
+  formatModels: DEFAULT_FORMAT_MODELS,
   postprocessPrompt: DEFAULT_POSTPROCESS_PROMPT,
   logFolder: "",
   reasoningEffort: "low",

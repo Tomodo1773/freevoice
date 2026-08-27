@@ -25,7 +25,7 @@ Windows 専用の Push-to-Talk 音声入力ツール。ショートカットキ�
 
 ### AI 後処理・テキスト整形
 
-文字起こし結果をさらに AI で後処理します。後処理プロバイダーは **Azure OpenAI** / **OpenAI** から選択でき、文字起こし側とは独立してエンドポイント・API キー・モデルを指定できます。
+文字起こし結果をさらに AI で後処理します。後処理プロバイダーは **Azure OpenAI** / **OpenAI** / **Gemini**（Google AI Studio）から選択でき、文字起こし側とは独立してエンドポイント・API キー・モデルを指定できます。API キーとモデルはプロバイダーごとに保持されるため、プロバイダーを切り替えても以前の設定はそのまま残ります。
 
 - 誤字・脱字の修正
 - 句読点の自動挿入
@@ -152,7 +152,7 @@ Ctrl+Shift+Space 長押し
 - Windows 10 / 11
 - マイクデバイス
 - 文字起こし用に **Azure AI Foundry**（`gpt-4o-transcribe` 等）または **Azure AI Speech** のエンドポイント
-- 後処理（整形）用に **Azure OpenAI** または **OpenAI** の API キー
+- 後処理（整形）用に **Azure OpenAI** / **OpenAI** / **Gemini**（Google AI Studio）いずれかの API キー
 
 ### インストール
 
@@ -184,11 +184,11 @@ Ctrl+Shift+Space 長押し
 | Speech エンドポイント | （空） | Azure AI Speech 使用時のエンドポイント |
 | 言語 | `ja-JP` | Azure AI Speech 使用時の認識言語 |
 | 文字起こしモデル | `gpt-4o-transcribe` | 音声認識に使用するモデル |
-| 後処理プロバイダー | Azure OpenAI | Azure OpenAI / OpenAI |
+| 後処理プロバイダー | Azure OpenAI | Azure OpenAI / OpenAI / Gemini |
 | 後処理エンドポイント | （空） | 後処理用の v1 エンドポイント URL（Azure 選択時のみ） |
-| 後処理 API Key | （空） | 後処理用 API キー（暗号化保管） |
-| 後処理モデル | `gpt-5.6-terra` | テキスト整形に使用するモデル |
-| Reasoning Effort | `low` | 後処理モデルの推論強度（none/low/medium/high） |
+| 後処理 API Key | （空） | 後処理用 API キー（プロバイダーごとに保持、暗号化保管） |
+| 後処理モデル | Azure/OpenAI: `gpt-5.6-terra`<br>Gemini: `gemini-3.7-flash` | テキスト整形に使用するモデル（プロバイダーごとに保持） |
+| Reasoning Effort | `low` | 後処理モデルの推論強度（none/low/medium/high）<br>Gemini 3 系は `none` 非対応 |
 | LangSmith API Key | （空） | LangSmith トレーシング用（任意） |
 | LangSmith Project | （空） | LangSmith のプロジェクト名（任意） |
 | LangSmith Region | US | LangSmith のリージョン（US/EU、任意） |
@@ -225,7 +225,7 @@ pnpm tsc --noEmit
 | UI コンポーネント | Radix UI Themes |
 | デスクトップ | Tauri 2 (Rust) |
 | 音声認識 | Microsoft Azure AI Foundry / Azure AI Speech |
-| テキスト整形 | Microsoft Azure OpenAI / OpenAI |
+| テキスト整形 | Microsoft Azure OpenAI / OpenAI / Google Gemini |
 | トレーシング（任意） | LangSmith |
 
 ---

@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logWarn } from "./diagLog";
 import { ChatMessage } from "./postprocess";
-import { FormatProvider, LangsmithRegion, ReasoningEffort } from "./types";
+import { FORMAT_PROVIDERS, FormatProvider } from "./formatProvider";
+import { LangsmithRegion, ReasoningEffort } from "./types";
 
 const LANGSMITH_ENDPOINTS: Record<LangsmithRegion, string> = {
   us: "https://api.smith.langchain.com/otel/v1/traces",
@@ -75,7 +76,7 @@ export function buildLlmSpanPayload(
   const traceId = randomHex(16);
   const spanId = randomHex(8);
 
-  const system = params.provider === "openai" ? "openai" : "azure.openai";
+  const system = FORMAT_PROVIDERS[params.provider].langsmithSystem;
 
   const attributes: Attribute[] = [
     strAttr("gen_ai.system", system),

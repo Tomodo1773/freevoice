@@ -1,5 +1,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { postprocess, buildContextualUserMessage, buildPostprocessMessages } from "./postprocess";
+import {
+  postprocess,
+  buildContextualUserMessage,
+  buildPostprocessMessages,
+  buildFormatUrl,
+  buildFormatRequest,
+} from "./postprocess";
 
 function mockFetch(content = "整形済み") {
   return vi.fn().mockResolvedValue({
@@ -79,5 +85,45 @@ describe("buildPostprocessMessages", () => {
   it("空の prompt ではデフォルトプロンプトを使用", () => {
     const msgs = buildPostprocessMessages("", "hello");
     expect(msgs[0].content).not.toBe("");
+  });
+});
+
+describe("buildFormatUrl", () => {
+  it("Azure は入力エンドポイントから v1 パスを組み立てる", () => {
+    expect(buildFormatUrl("azure", "https://my-resource.openai.azure.com/")).toBe(
+      "https://my-resource.openai.azure.com/openai/v1/chat/completions",
+    );
+  });
+
+  it("OpenAI は固定エンドポイントを使い、入力エンドポイントを無視する", () => {
+    expect(buildFormatUrl("openai", "https://ignored.example.com")).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
+  });
+
+  it("Gemini は Google AI Studio の OpenAI 互換エンドポイントを使う", () => {
+    expect(buildFormatUrl("gemini", "")).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    );
+  });
+});
+
+describe("buildFormatRequest", () => {
+  it("Azure は api-key ヘッダーで認証する", () => {
+    const { headers } = buildFormatRequest("azure", "https://my-resource.openai.azure.com", "KEY");
+    expect(headers["api-key"]).toBe("KEY");
+    expect(headers.Authorization).toBeUndefined();
+  });
+
+  it("OpenAI は Bearer トークンで認証する", () => {
+    const { headers } = buildFormatRequest("openai", "", "KEY");
+    expect(headers.Authorization).toBe("Bearer KEY");
+    expect(headers["api-key"]).toBeUndefined();
+  });
+
+  it("Gemini は Bearer トークンで認証する", () => {
+    const { headers } = buildFormatRequest("gemini", "", "KEY");
+    expect(headers.Authorization).toBe("Bearer KEY");
+    expect(headers["api-key"]).toBeUndefined();
   });
 });
