@@ -36,19 +36,11 @@ function getStore() {
   return storePromise;
 }
 
-async function getValue(key: string): Promise<string> {
-  const store = await getStore();
-  // 別ウィンドウからの書き込みを反映するためディスクから再読み込み
-  await store.reload();
-  return (await store.get<string>(key)) ?? "";
-}
-
 async function setValue(key: string, value: string): Promise<void> {
   const store = await getStore();
   await store.set(key, value);
 }
 
-export const getLangsmithApiKey = () => getValue(LANGSMITH_API_KEY_KEY);
 export const setLangsmithApiKey = (key: string) => setValue(LANGSMITH_API_KEY_KEY, key);
 
 export async function setTranscriptionApiKeys(keys: TranscriptionApiKeys): Promise<void> {

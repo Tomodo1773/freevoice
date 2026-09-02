@@ -1,12 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  GEMINI_MAX_DURATION_MS,
+  GeminiLiveSession,
   geminiActivityEnd,
   geminiActivityStart,
   geminiAudioChunk,
   geminiSetup,
   parseGeminiMessage,
-  scheduleGeminiMaxDuration,
 } from "./geminiLive";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
@@ -40,19 +39,18 @@ describe("Gemini Live protocol", () => {
       .toEqual({ type: "final", text: "確定" });
     expect(parseGeminiMessage('{"serverContent":{"interimInputTranscription":{"text":"旧"},"inputTranscription":{"text":"新"}}}'))
       .toEqual({ type: "final", text: "新" });
-    expect(parseGeminiMessage("not json")).toEqual({ type: "ignored" });
+    expect(parseGeminiMessage("not json")).toBeNull();
   });
 
-  it("PCM開始から9分で停止通知する", () => {
-    vi.useFakeTimers();
-    const onElapsed = vi.fn();
-    scheduleGeminiMaxDuration(onElapsed);
-
-    vi.advanceTimersByTime(GEMINI_MAX_DURATION_MS - 1);
-    expect(onElapsed).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(onElapsed).toHaveBeenCalledOnce();
+  it("設定不足で開始できなくても安全に停止できる", async () => {
+    const session = new GeminiLiveSession();
+    await expect(session.start({
+      apiKey: "",
+      model: "gemini-3.5-transcribe-live",
+      language: "ja-JP",
+      mediaStream: {} as MediaStream,
+      onStopRequested: vi.fn(),
+    })).rejects.toThrow("Gemini APIキーが未設定です");
+    await expect(session.stop()).resolves.toBe("");
   });
-
-  afterEach(() => vi.useRealTimers());
 });

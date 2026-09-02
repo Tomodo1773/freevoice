@@ -7,17 +7,12 @@ import { AudioMonitor, StreamingTranscript } from "./transcription";
 export const GEMINI_LIVE_ENDPOINT =
   "wss://generativelanguage.googleapis.com/ws/" +
   "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
-export const GEMINI_MAX_DURATION_MS = 9 * 60 * 1000;
-
-export function scheduleGeminiMaxDuration(onElapsed: () => void): ReturnType<typeof setTimeout> {
-  return setTimeout(onElapsed, GEMINI_MAX_DURATION_MS);
-}
+const GEMINI_MAX_DURATION_MS = 9 * 60 * 1000;
 
 export type GeminiServerEvent =
   | { type: "setup-complete" }
   | { type: "interim"; text: string }
-  | { type: "final"; text: string }
-  | { type: "ignored" };
+  | { type: "final"; text: string };
 
 function qualifyModel(model: string): string {
   return model.startsWith("models/") ? model : `models/${model}`;
@@ -46,11 +41,7 @@ export const geminiActivityEnd = (): string =>
   JSON.stringify({ realtimeInput: { activityEnd: {} } });
 
 function encodeBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
+  return btoa(String.fromCharCode(...bytes));
 }
 
 export function geminiAudioChunk(buffer: ArrayBuffer): string {
@@ -64,7 +55,7 @@ export function geminiAudioChunk(buffer: ArrayBuffer): string {
   });
 }
 
-export function parseGeminiMessage(message: string): GeminiServerEvent {
+export function parseGeminiMessage(message: string): GeminiServerEvent | null {
   try {
     const root = JSON.parse(message) as {
       setupComplete?: unknown;
@@ -83,7 +74,7 @@ export function parseGeminiMessage(message: string): GeminiServerEvent {
   } catch {
     // 認識結果以外と壊れたフレームは同じく無視する。
   }
-  return { type: "ignored" };
+  return null;
 }
 
 type SessionState = "connecting" | "active" | "stopping" | "closed";
@@ -97,22 +88,13 @@ export class GeminiLiveSession implements ActiveSession {
   private readonly transcript = new StreamingTranscript();
   private readonly pendingAudio: string[] = [];
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopPromise: Promise<string> | null = null;
   private onInterimResult?: (text: string) => void;
   private onRecognitionError?: (message: string) => void;
   private onStopRequested?: () => void;
 
-  private readyResolve!: () => void;
-  private readyReject!: (error: unknown) => void;
-  private readonly ready = new Promise<void>((resolve, reject) => {
-    this.readyResolve = resolve;
-    this.readyReject = reject;
-  });
-
-  private finalResolve!: () => void;
-  private readonly finalized = new Promise<void>((resolve) => {
-    this.finalResolve = resolve;
-  });
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((error: unknown) => void) | null = null;
+  private finalResolve: (() => void) | null = null;
 
   async start(params: {
     apiKey: string;
@@ -131,6 +113,7 @@ export class GeminiLiveSession implements ActiveSession {
     this.onRecognitionError = params.onRecognitionError;
     this.onStopRequested = params.onStopRequested;
 
+    let ready!: Promise<void>;
     try {
       this.monitor = new AudioMonitor(params.mediaStream, 16000);
       await this.monitor.context.audioWorklet.addModule(pcmWorkletUrl);
@@ -146,16 +129,21 @@ export class GeminiLiveSession implements ActiveSession {
       this.worklet.connect(this.gain);
       this.gain.connect(this.monitor.context.destination);
       if (this.monitor.context.state === "suspended") await this.monitor.context.resume();
+      if (this.state !== "connecting") throw new DOMException("session closed", "AbortError");
 
-      this.maxDurationTimer = scheduleGeminiMaxDuration(() => {
+      this.maxDurationTimer = setTimeout(() => {
         if (this.state !== "active") return;
         logInfo("gemini.duration", "maximum recording duration reached");
         this.onStopRequested?.();
-      });
+      }, GEMINI_MAX_DURATION_MS);
 
       const query = new URLSearchParams({ key: params.apiKey });
       const socket = new WebSocket(`${GEMINI_LIVE_ENDPOINT}?${query}`);
       this.socket = socket;
+      ready = new Promise<void>((resolve, reject) => {
+        this.readyResolve = resolve;
+        this.readyReject = reject;
+      });
       socket.binaryType = "arraybuffer";
       socket.onopen = () => {
         if (this.state === "connecting") socket.send(geminiSetup(params.model, params.language));
@@ -179,7 +167,7 @@ export class GeminiLiveSession implements ActiveSession {
       throw new UserVisibleError("Gemini Liveを開始できませんでした");
     }
 
-    return this.ready;
+    return ready;
   }
 
   getAudioLevel(): number {
@@ -190,12 +178,7 @@ export class GeminiLiveSession implements ActiveSession {
     return this.monitor?.wasSilent ?? true;
   }
 
-  stop(signal?: AbortSignal): Promise<string> {
-    if (!this.stopPromise) this.stopPromise = this.finish(signal);
-    return this.stopPromise;
-  }
-
-  private async finish(signal?: AbortSignal): Promise<string> {
+  async stop(signal?: AbortSignal): Promise<string> {
     const wasActive = this.state === "active";
     const wasConnecting = this.state === "connecting";
     if (this.state !== "closed") this.state = "stopping";
@@ -203,7 +186,7 @@ export class GeminiLiveSession implements ActiveSession {
     this.getAudioLevel();
     this.releaseCapture();
 
-    if (wasConnecting) this.readyReject(new DOMException("session closed", "AbortError"));
+    if (wasConnecting) this.readyReject?.(new DOMException("session closed", "AbortError"));
     if (wasActive) this.socket?.send(geminiActivityEnd());
 
     try {
@@ -233,11 +216,12 @@ export class GeminiLiveSession implements ActiveSession {
       };
       const finish = (value: boolean) => {
         cleanup();
+        this.finalResolve = null;
         resolve(value);
       };
       if (signal?.aborted) return onAbort();
       signal?.addEventListener("abort", onAbort, { once: true });
-      void this.finalized.then(() => finish(true));
+      this.finalResolve = () => finish(true);
     });
   }
 
@@ -251,6 +235,7 @@ export class GeminiLiveSession implements ActiveSession {
   private handleMessage(data: string | ArrayBuffer): void {
     const text = typeof data === "string" ? data : new TextDecoder().decode(data);
     const event = parseGeminiMessage(text);
+    if (!event) return;
     switch (event.type) {
       case "setup-complete":
         if (this.state !== "connecting" || !this.socket) return;
@@ -258,7 +243,7 @@ export class GeminiLiveSession implements ActiveSession {
         for (const message of this.pendingAudio) this.socket.send(message);
         this.pendingAudio.length = 0;
         this.state = "active";
-        this.readyResolve();
+        this.readyResolve?.();
         break;
       case "interim": {
         const transcript = this.transcript.observeInterim(event.text);
@@ -268,11 +253,9 @@ export class GeminiLiveSession implements ActiveSession {
       case "final": {
         const transcript = this.transcript.confirm(event.text);
         if (transcript) this.onInterimResult?.(transcript);
-        if (this.state === "stopping") this.finalResolve();
+        if (this.state === "stopping") this.finalResolve?.();
         break;
       }
-      case "ignored":
-        break;
     }
   }
 
@@ -284,7 +267,7 @@ export class GeminiLiveSession implements ActiveSession {
     this.releaseCapture();
     this.pendingAudio.length = 0;
     if (previous === "connecting") {
-      this.readyReject(new UserVisibleError("Gemini Liveに接続できませんでした"));
+      this.readyReject?.(new UserVisibleError("Gemini Liveに接続できませんでした"));
     } else {
       this.onRecognitionError?.("音声認識の接続が切断されました");
     }
