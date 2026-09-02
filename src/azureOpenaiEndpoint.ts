@@ -1,8 +1,10 @@
+import { UserVisibleError } from "./errors";
+
 function normalizeEndpoint(endpoint: string): URL {
   try {
     return new URL(endpoint.trim());
   } catch {
-    throw new Error(
+    throw new UserVisibleError(
       "endpoint は https://{resource}.services.ai.azure.com/api/projects/{project}形式で設定してください"
     );
   }

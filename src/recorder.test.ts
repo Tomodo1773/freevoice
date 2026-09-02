@@ -9,6 +9,7 @@ import {
   type FormatOutcome,
 } from "./recorder";
 import { DEFAULT_SETTINGS } from "./types";
+import { UserVisibleError } from "./errors";
 
 // diagLog は invoke(@tauri-apps/api/core) を叩くため、node 環境では no-op に差し替える。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
@@ -386,6 +387,19 @@ describe("RecorderController / RecordingJob", () => {
       expect(h.controller.isRecording).toBe(false);
     });
 
+    it("セッションの時間上限通知をキー解放と同じ通常停止として処理する", async () => {
+      const h = harness();
+      h.controller.keyDown();
+      await settle();
+
+      h.getCallbacks()?.onStopRequested();
+      await settle();
+
+      expect(h.session.stop).toHaveBeenCalledOnce();
+      expect(h.calls).toContain("done:false:");
+      expect(h.calls.some((call) => call.startsWith("error:"))).toBe(false);
+    });
+
     it("セッション開始失敗でも error 表示し、ミュートは確実に解除される", async () => {
       const failedSession = {
         stop: vi.fn(async () => ""),
@@ -394,7 +408,7 @@ describe("RecorderController / RecordingJob", () => {
       } as ActiveSession & { stop: ReturnType<typeof vi.fn> };
       const createSession = vi.fn(() => ({
         session: failedSession,
-        ready: Promise.reject(new Error("endpoint が未設定です")),
+        ready: Promise.reject(new UserVisibleError("endpoint が未設定です")),
       }));
       const h = harness({ createSession });
       h.controller.keyDown();

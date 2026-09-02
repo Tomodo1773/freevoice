@@ -16,12 +16,13 @@ Windows 専用の Push-to-Talk 音声入力ツール。ショートカットキ�
 
 ### 文字起こしプロバイダーの選択
 
-以下の 2 つの文字起こしプロバイダーから選択できます。
+以下の 3 つの文字起こしプロバイダーから選択できます。
 
 | プロバイダー | 方式 | 特徴 |
 |------------|------|------|
 | Azure AI Foundry | 録音完了後に一括で文字起こし | `gpt-4o-transcribe` 等のモデルを使用 |
 | Azure AI Speech | リアルタイム連続認識 | 録音中に認識結果をオーバーレイにリアルタイム表示 |
+| Gemini Live | リアルタイム連続認識 | `gemini-3.5-transcribe-live` で認識結果を逐次表示 |
 
 ### AI 後処理・テキスト整形
 
@@ -51,7 +52,7 @@ Windows 専用の Push-to-Talk 音声入力ツール。ショートカットキ�
 
 | 状態 | 表示 | 内容 |
 |------|------|------|
-| 🔴 listening | 録音中 | 音量メーター表示（Azure Speech 時はリアルタイムテキストも表示） |
+| 🔴 listening | 録音中 | 音量メーター表示（Azure Speech / Gemini Live 時はリアルタイムテキストも表示） |
 | ◌ transcribing | 文字起こし中 | AI API 呼び出し中 |
 | ◌ formatting | 整形中 | 後処理 AI 呼び出し中 |
 | ✓ done | 完了 | テキスト貼り付け完了 |
@@ -119,7 +120,7 @@ Ctrl+Shift+Space 長押し
  フォーカス中フィールドへ
 ```
 
-### リアルタイム認識フロー（Azure AI Speech）
+### リアルタイム認識フロー（Azure AI Speech / Gemini Live）
 
 ```
 Ctrl+Shift+Space 長押し
@@ -151,7 +152,7 @@ Ctrl+Shift+Space 長押し
 
 - Windows 10 / 11
 - マイクデバイス
-- 文字起こし用に **Azure AI Foundry**（`gpt-4o-transcribe` 等）または **Azure AI Speech** のエンドポイント
+- 文字起こし用に **Azure AI Foundry** / **Azure AI Speech** のエンドポイントと API キー、または **Gemini Live** の API キー
 - 後処理（整形）用に **Azure OpenAI** / **OpenAI** / **Gemini**（Google AI Studio）いずれかの API キー
 
 ### インストール
@@ -178,15 +179,16 @@ Ctrl+Shift+Space 長押し
 | 入力デバイス | システム既定 | 録音に使用するマイク |
 | スタートアップ | OFF | Windows 起動時の自動起動 |
 | ログ保存フォルダ | （空） | ログ出力先（空の場合は出力なし） |
-| 文字起こしプロバイダー | Azure AI Foundry | Azure AI Foundry / Azure AI Speech |
+| 文字起こしプロバイダー | Azure AI Foundry | Azure AI Foundry / Azure AI Speech / Gemini Live |
 | 文字起こしエンドポイント | （空） | Azure AI Foundry の v1 エンドポイント URL |
-| 文字起こし API Key | （空） | 文字起こし用 API キー（暗号化保管） |
+| 文字起こし API Key | （空） | 文字起こし用 API キー（プロバイダーごとにローカル保存） |
 | Speech エンドポイント | （空） | Azure AI Speech 使用時のエンドポイント |
-| 言語 | `ja-JP` | Azure AI Speech 使用時の認識言語 |
+| 言語 | `ja-JP` | Azure AI Speech / Gemini Live 使用時の認識言語 |
 | 文字起こしモデル | `gpt-4o-transcribe` | 音声認識に使用するモデル |
+| Gemini文字起こしモデル | `gemini-3.5-transcribe-live` | Gemini Live 使用時のモデル |
 | 後処理プロバイダー | Azure OpenAI | Azure OpenAI / OpenAI / Gemini |
 | 後処理エンドポイント | （空） | 後処理用の v1 エンドポイント URL（Azure 選択時のみ） |
-| 後処理 API Key | （空） | 後処理用 API キー（プロバイダーごとに保持、暗号化保管） |
+| 後処理 API Key | （空） | 後処理用 API キー（プロバイダーごとにローカル保存） |
 | 後処理モデル | Azure/OpenAI: `gpt-5.6-terra`<br>Gemini: `gemini-3.7-flash` | テキスト整形に使用するモデル（プロバイダーごとに保持） |
 | Reasoning Effort | `low` | 後処理モデルの推論強度（none/low/medium/high）<br>Gemini 3 系は `none` 非対応 |
 | LangSmith API Key | （空） | LangSmith トレーシング用（任意） |
@@ -224,7 +226,7 @@ pnpm tsc --noEmit
 | フロントエンド | React 18 + TypeScript + Vite |
 | UI コンポーネント | Radix UI Themes |
 | デスクトップ | Tauri 2 (Rust) |
-| 音声認識 | Microsoft Azure AI Foundry / Azure AI Speech |
+| 音声認識 | Microsoft Azure AI Foundry / Azure AI Speech / Google Gemini Live |
 | テキスト整形 | Microsoft Azure OpenAI / OpenAI / Google Gemini |
 | トレーシング（任意） | LangSmith |
 
