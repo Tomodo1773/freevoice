@@ -1,4 +1,4 @@
-import { formatError } from "./errors";
+import { formatError, UserVisibleError } from "./errors";
 import { logInfo, logWarn, logError } from "./diagLog";
 import type { AppSettings } from "./types";
 
@@ -44,6 +44,7 @@ export interface PendingSession {
 export interface SessionCallbacks {
   onInterim: (text: string) => void;
   onError: (message: string) => void;
+  onStopRequested: () => void;
 }
 
 export interface FormatOutcome {
@@ -129,15 +130,13 @@ function isAbortError(e: unknown): boolean {
 
 /** 詳細なエラーを短い定型メッセージに変換する（オーバーレイ表示用）。 */
 export function toUserMessage(err: unknown): string {
+  if (err instanceof UserVisibleError) return err.message;
   const msg = formatError(err);
   if (msg.startsWith("文字起こしAPI エラー")) return "文字起こしAPIでエラーが発生しました";
   if (msg.startsWith("後処理API エラー")) return "後処理APIでエラーが発生しました";
   if (err instanceof DOMException) {
     if (err.name === "NotAllowedError") return "マイクの使用が許可されていません";
     if (err.name === "NotFoundError") return "マイクが見つかりません";
-  }
-  if (msg.includes("が未設定です") || msg.includes("形式で設定してください")) {
-    return msg;
   }
   return "エラーが発生しました";
 }
@@ -344,6 +343,9 @@ export class RecordingJob {
           if (this.acceptsSessionCallbacks) {
             this.settleStop({ reason: "recognition-error", message });
           }
+        },
+        onStopRequested: () => {
+          if (this.acceptsSessionCallbacks) this.settleStop({ reason: "release" });
         },
       });
       // ready を待つ前からジョブが session を所有する。タイムアウト時も finally で停止できる。

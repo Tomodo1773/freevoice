@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TranscriptionSession } from "./transcription";
+import { StreamingTranscript, TranscriptionSession } from "./transcription";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
@@ -89,5 +89,23 @@ describe("TranscriptionSession", () => {
     expect(sdk.fromStreamInput).toHaveBeenCalledWith(mediaStream);
     await session.stop();
     expect(stopTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe("StreamingTranscript", () => {
+  it("確定文を蓄積し、確定がなければ最新の暫定文を返す", () => {
+    const transcript = new StreamingTranscript();
+
+    transcript.observeInterim("途中");
+    expect(transcript.fullText).toBe("途中");
+
+    transcript.confirm("一文目。");
+    transcript.observeInterim("二文目の途中");
+    expect(transcript.fullText).toBe("一文目。二文目の途中");
+    expect(transcript.confirmedText || transcript.interimText).toBe("一文目。");
+
+    const interimOnly = new StreamingTranscript();
+    interimOnly.observeInterim("未確定");
+    expect(interimOnly.confirmedText || interimOnly.interimText).toBe("未確定");
   });
 });

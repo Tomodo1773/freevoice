@@ -3,11 +3,16 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TranscriptionSession } from "./transcription";
+import { GeminiLiveSession } from "./geminiLive";
 import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
 import { getContext, refreshContext } from "./windowContext";
 import { sendLlmSpan } from "./langsmithTrace";
 import { loadSettings, persistSettings } from "./useSettings";
-import { getAllApiKeys, migrateFormatApiKey } from "./apiKeyStore";
+import {
+  getAllApiKeys,
+  migrateFormatApiKey,
+  migrateTranscriptionApiKey,
+} from "./apiKeyStore";
 import { OverlayView } from "./overlayView";
 import {
   RecorderController,
@@ -58,7 +63,12 @@ async function validateAudioDevice(
 
 async function loadConfig(): Promise<RecordingConfig> {
   const initial = loadSettings();
-  const { apiKey, formatApiKeys, langsmithApiKey } = await getAllApiKeys();
+  await Promise.all([
+    migrateFormatApiKey(),
+    migrateTranscriptionApiKey(initial.transcriptionProvider),
+  ]);
+  const { transcriptionApiKeys, formatApiKeys, langsmithApiKey } = await getAllApiKeys();
+  const apiKey = transcriptionApiKeys[initial.transcriptionProvider];
   const formatApiKey = formatApiKeys[initial.formatProvider];
   warmupFormatConnection(initial.formatProvider, initial.formatEndpoint);
   const { effectiveDeviceId, settings } = await validateAudioDevice(initial);
@@ -88,6 +98,20 @@ function createTranscriptionSession(
   callbacks: SessionCallbacks
 ): PendingSession {
   const s = config.settings;
+  if (s.transcriptionProvider === "gemini-live") {
+    const session = new GeminiLiveSession();
+    const ready = session.start({
+      apiKey: config.apiKey,
+      model: s.geminiTranscriptionModel,
+      language: s.speechLanguage,
+      mediaStream: mic,
+      onInterimResult: callbacks.onInterim,
+      onRecognitionError: callbacks.onError,
+      onStopRequested: callbacks.onStopRequested,
+    });
+    return { session, ready };
+  }
+
   const session = new TranscriptionSession();
   const ready = session.start({
     provider: s.transcriptionProvider,
@@ -283,9 +307,6 @@ export default function Overlay() {
 
   useEffect(() => {
     logInfo("overlay.init", "overlay window initialized");
-    migrateFormatApiKey().catch((e) =>
-      logWarn("overlay.init", "migrateFormatApiKey failed", { error: e })
-    );
     // 古いログフォルダを起動時にクリーンアップ
     (async () => {
       try {

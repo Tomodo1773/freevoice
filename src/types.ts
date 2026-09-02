@@ -4,7 +4,7 @@ export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type InputMethod = "clipboard" | "keystroke";
 
-export type TranscriptionProvider = "azure-openai" | "azure-speech";
+export type TranscriptionProvider = "azure-openai" | "azure-speech" | "gemini-live";
 
 export type LangsmithRegion = "us" | "eu";
 
@@ -12,6 +12,7 @@ export interface AppSettings {
   shortcut: string;
   endpoint: string;
   transcriptionModel: string;
+  geminiTranscriptionModel: string;
   postprocessPrompt: string;
   logFolder: string;
   reasoningEffort: ReasoningEffort;
@@ -88,6 +89,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   shortcut: "Ctrl+Shift+Space",
   endpoint: "",
   transcriptionModel: "gpt-4o-transcribe",
+  geminiTranscriptionModel: "gemini-3.5-transcribe-live",
   formatModels: DEFAULT_FORMAT_MODELS,
   postprocessPrompt: DEFAULT_POSTPROCESS_PROMPT,
   logFolder: "",

@@ -4,13 +4,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
-  setApiKey,
+  setTranscriptionApiKeys,
   setFormatApiKeys,
   setLangsmithApiKey,
   getAllApiKeys,
   migrateFormatApiKey,
+  migrateTranscriptionApiKey,
   emptyFormatApiKeys,
+  emptyTranscriptionApiKeys,
   type FormatApiKeys,
+  type TranscriptionApiKeys,
 } from "./apiKeyStore";
 import {
   Box,
@@ -66,7 +69,8 @@ function toShortcutMainKey(event: KeyboardEvent<HTMLInputElement>): string | nul
 export default function App() {
   const { settings, saveSettings } = useSettings();
   const [form, setForm] = useState<AppSettings>(settings);
-  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [transcriptionApiKeyInputs, setTranscriptionApiKeyInputs] =
+    useState<TranscriptionApiKeys>(emptyTranscriptionApiKeys);
   const [formatApiKeyInputs, setFormatApiKeyInputs] = useState<FormatApiKeys>(emptyFormatApiKeys);
   const [langsmithApiKeyInput, setLangsmithApiKeyInput] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
@@ -84,11 +88,14 @@ export default function App() {
     useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
-    migrateFormatApiKey().then(() => getAllApiKeys()).then(({ apiKey, formatApiKeys, langsmithApiKey }) => {
-      if (apiKey) setApiKeyInput(apiKey);
+    Promise.all([
+      migrateFormatApiKey(),
+      migrateTranscriptionApiKey(settings.transcriptionProvider),
+    ]).then(() => getAllApiKeys()).then(({ transcriptionApiKeys, formatApiKeys, langsmithApiKey }) => {
+      setTranscriptionApiKeyInputs(transcriptionApiKeys);
       setFormatApiKeyInputs(formatApiKeys);
       if (langsmithApiKey) setLangsmithApiKeyInput(langsmithApiKey);
-    });
+    }).catch((e) => logWarn("app.init", "API key loading failed", { error: e }));
     isEnabled().then(setAutostartEnabled).catch((e) =>
       logWarn("app.init", "autostart isEnabled failed", { error: e })
     );
@@ -128,7 +135,7 @@ export default function App() {
 
   const handleSave = async () => {
     saveSettings(form);
-    await setApiKey(apiKeyInput);
+    await setTranscriptionApiKeys(transcriptionApiKeyInputs);
     await setFormatApiKeys(formatApiKeyInputs);
     await setLangsmithApiKey(langsmithApiKeyInput);
     try {
@@ -152,6 +159,7 @@ export default function App() {
   };
 
   const formatSpec = FORMAT_PROVIDERS[form.formatProvider];
+  const currentTranscriptionApiKey = transcriptionApiKeyInputs[form.transcriptionProvider];
   const currentFormatApiKey = formatApiKeyInputs[form.formatProvider];
   const currentFormatModel = form.formatModels[form.formatProvider];
 
@@ -164,6 +172,13 @@ export default function App() {
 
   const handleFormatApiKeyChange = (key: string) => {
     setFormatApiKeyInputs((prev) => ({ ...prev, [form.formatProvider]: key }));
+  };
+
+  const handleTranscriptionApiKeyChange = (key: string) => {
+    setTranscriptionApiKeyInputs((prev) => ({
+      ...prev,
+      [form.transcriptionProvider]: key,
+    }));
   };
 
   const handleTest = async () => {
@@ -429,6 +444,7 @@ export default function App() {
                   <Select.Content>
                     <Select.Item value="azure-openai">Microsoft Foundry (GPT-4o transcribe)</Select.Item>
                     <Select.Item value="azure-speech">Microsoft Foundry (Azure AI Speech)</Select.Item>
+                    <Select.Item value="gemini-live">Google Gemini Live</Select.Item>
                   </Select.Content>
                 </Select.Root>
               </Box>
@@ -474,13 +490,14 @@ export default function App() {
                 <TextField.Root
                   id="apiKey"
                   type="password"
-                  value={apiKeyInput}
-                  onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="APIキーを入力"
+                  value={currentTranscriptionApiKey}
+                  onChange={(e) => handleTranscriptionApiKeyChange(e.target.value)}
+                  placeholder={form.transcriptionProvider === "gemini-live" ? "AIza..." : "APIキーを入力"}
                 />
               </Box>
 
-              {form.transcriptionProvider === "azure-speech" && (
+              {(form.transcriptionProvider === "azure-speech" ||
+                form.transcriptionProvider === "gemini-live") && (
                 <Box>
                   <Text as="label" className="field-label" htmlFor="speechLanguage">
                     言語
@@ -504,6 +521,20 @@ export default function App() {
                     value={form.transcriptionModel}
                     onChange={(e) => handleChange("transcriptionModel", e.target.value)}
                     placeholder="gpt-4o-transcribe"
+                  />
+                </Box>
+              )}
+
+              {form.transcriptionProvider === "gemini-live" && (
+                <Box>
+                  <Text as="label" className="field-label" htmlFor="geminiTranscriptionModel">
+                    モデル
+                  </Text>
+                  <TextField.Root
+                    id="geminiTranscriptionModel"
+                    value={form.geminiTranscriptionModel}
+                    onChange={(e) => handleChange("geminiTranscriptionModel", e.target.value)}
+                    placeholder="gemini-3.5-transcribe-live"
                   />
                 </Box>
               )}

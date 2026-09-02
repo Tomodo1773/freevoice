@@ -2,6 +2,88 @@ import type * as SpeechSDKTypes from "microsoft-cognitiveservices-speech-sdk";
 import { buildAzureTranscriptionUrl } from "./azureOpenaiEndpoint";
 import { TranscriptionProvider } from "./types";
 import { logInfo, logWarn, logError } from "./diagLog";
+import { UserVisibleError } from "./errors";
+
+type AzureTranscriptionProvider = Exclude<TranscriptionProvider, "gemini-live">;
+
+export class StreamingTranscript {
+  private confirmed: string[] = [];
+  private interim = "";
+
+  confirm(text: string): string | null {
+    if (!text) return null;
+    this.confirmed.push(text);
+    this.interim = "";
+    return this.fullText;
+  }
+
+  observeInterim(text: string): string | null {
+    if (!text || text === this.interim) return null;
+    this.interim = text;
+    return this.fullText;
+  }
+
+  promoteInterim(): void {
+    if (!this.interim) return;
+    this.confirmed.push(this.interim);
+    this.interim = "";
+  }
+
+  get fullText(): string {
+    return this.confirmedText + this.interim;
+  }
+
+  get confirmedText(): string {
+    return this.confirmed.join("");
+  }
+
+  get interimText(): string {
+    return this.interim;
+  }
+
+  get confirmedCount(): number {
+    return this.confirmed.length;
+  }
+}
+
+export class AudioMonitor {
+  readonly context: AudioContext;
+  readonly source: MediaStreamAudioSourceNode;
+  private readonly analyser: AnalyserNode;
+  private peakAudioLevel = 0;
+  private static readonly SILENCE_THRESHOLD = 0.05;
+
+  constructor(mediaStream: MediaStream, sampleRate?: number) {
+    this.context = new AudioContext(sampleRate ? { sampleRate } : undefined);
+    this.source = this.context.createMediaStreamSource(mediaStream);
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 1024;
+    this.analyser.smoothingTimeConstant = 0.7;
+    this.source.connect(this.analyser);
+  }
+
+  getAudioLevel(): number {
+    const values = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+    this.analyser.getByteFrequencyData(values);
+    let sum = 0;
+    for (const value of values) sum += value;
+    const level = sum / values.length / 255;
+    this.peakAudioLevel = Math.max(this.peakAudioLevel, level);
+    return level;
+  }
+
+  get wasSilent(): boolean {
+    return this.peakAudioLevel < AudioMonitor.SILENCE_THRESHOLD;
+  }
+
+  get peakLevel(): number {
+    return this.peakAudioLevel;
+  }
+
+  close(): void {
+    void this.context.close().catch(() => {});
+  }
+}
 
 function pickMimeType(): string {
   const candidates = [
@@ -36,17 +118,14 @@ export class TranscriptionSession {
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private chunks: BlobPart[] = [];
-  private audioContext: AudioContext | null = null;
-  private analyser: AnalyserNode | null = null;
-  private peakAudioLevel = 0;
-  private static readonly SILENCE_THRESHOLD = 0.05;
+  private audioMonitor: AudioMonitor | null = null;
   private static readonly MAX_RECONNECTS = 3;
   private static readonly RECONNECT_DELAY_MS = 1000;
   private static readonly RECONNECT_TIMEOUT_MS = 5000;
   /** 無音区間で連発する NoMatch を間引くログ間隔。 */
   private static readonly NOMATCH_LOG_INTERVAL_MS = 5000;
 
-  private provider: TranscriptionProvider = "azure-openai";
+  private provider: AzureTranscriptionProvider = "azure-openai";
   private endpoint = "";
   private apiKey = "";
   private model = "";
@@ -57,10 +136,7 @@ export class TranscriptionSession {
 
   private SpeechSDK: typeof SpeechSDKTypes | null = null;
   private recognizer: SpeechSDKTypes.SpeechRecognizer | null = null;
-  private recognizedTexts: string[] = [];
-  /** 最新の暫定テキスト。recognized（確定）で空にし、recognizing（暫定）で更新する。
-   *  stop 時に recognized が間に合わない環境向けのフォールバック。 */
-  private lastInterimText = "";
+  private transcript = new StreamingTranscript();
   /** 最後に SDK の認識イベント（recognizing/recognized）を受けた時刻。
    *  stop 時にこれが古い＝イベント自体が止まった（世界B: SDK/サービスのストール）を切り分ける。 */
   private lastEventAt = 0;
@@ -88,7 +164,7 @@ export class TranscriptionSession {
   private closed = false;
 
   async start(params: {
-    provider: TranscriptionProvider;
+    provider: AzureTranscriptionProvider;
     endpoint: string;
     apiKey: string;
     model: string;
@@ -108,12 +184,12 @@ export class TranscriptionSession {
     this.onInterimResult = params.onInterimResult;
     this.onRecognitionError = params.onRecognitionError;
 
-    if (!this.apiKey) throw new Error("apiKey が未設定です");
+    if (!this.apiKey) throw new UserVisibleError("apiKey が未設定です");
     if (this.provider === "azure-openai") {
-      if (!this.endpoint) throw new Error("endpoint が未設定です");
-      if (!this.model) throw new Error("transcriptionModel が未設定です");
+      if (!this.endpoint) throw new UserVisibleError("endpoint が未設定です");
+      if (!this.model) throw new UserVisibleError("transcriptionModel が未設定です");
     } else {
-      if (!this.speechEndpoint) throw new Error("Speech エンドポイントが未設定です");
+      if (!this.speechEndpoint) throw new UserVisibleError("Speech エンドポイントが未設定です");
     }
 
     // マイクは RecordingJob が一度だけ取得して所有する。セッションは同じストリームを
@@ -123,20 +199,13 @@ export class TranscriptionSession {
       throw new DOMException("session closed", "AbortError");
     }
     this.mediaStream = mediaStream;
-    this.audioContext = new AudioContext();
-    const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 1024;
-    this.analyser.smoothingTimeConstant = 0.7;
-    source.connect(this.analyser);
-    this.peakAudioLevel = 0;
+    this.audioMonitor = new AudioMonitor(mediaStream);
 
     if (this.provider === "azure-speech") {
       const SDK = await import("microsoft-cognitiveservices-speech-sdk");
       if (this.closed) throw new DOMException("session closed", "AbortError");
       this.SpeechSDK = SDK;
-      this.recognizedTexts = [];
-      this.lastInterimText = "";
+      this.transcript = new StreamingTranscript();
       this.lastEventAt = Date.now();
       this.lastNoMatchLogAt = 0;
       this.stopping = false;
@@ -176,7 +245,7 @@ export class TranscriptionSession {
     if (now - this.lastNoMatchLogAt < TranscriptionSession.NOMATCH_LOG_INTERVAL_MS) return;
     this.lastNoMatchLogAt = now;
     logWarn("transcription.recognized", "NoMatch: audio reaching SDK but not recognized", {
-      recognizedCount: this.recognizedTexts.length,
+      recognizedCount: this.transcript.confirmedCount,
       reconnectCount: this.reconnectCount,
     });
   }
@@ -213,8 +282,8 @@ export class TranscriptionSession {
     recognizer.recognizing = (_, e) => {
       this.lastEventAt = Date.now();
       if (e.result.text) {
-        this.lastInterimText = e.result.text;
-        this.onInterimResult?.(this.recognizedTexts.join("") + e.result.text);
+        const text = this.transcript.observeInterim(e.result.text);
+        if (text) this.onInterimResult?.(text);
       }
     };
 
@@ -224,9 +293,8 @@ export class TranscriptionSession {
         e.result.reason === SDK.ResultReason.RecognizedSpeech &&
         e.result.text
       ) {
-        this.recognizedTexts.push(e.result.text);
-        this.lastInterimText = "";
-        this.onInterimResult?.(this.recognizedTexts.join(""));
+        const text = this.transcript.confirm(e.result.text);
+        if (text) this.onInterimResult?.(text);
       } else if (e.result.reason === SDK.ResultReason.NoMatch) {
         this.logNoMatchThrottled();
       }
@@ -242,8 +310,8 @@ export class TranscriptionSession {
         stopping: this.stopping,
         reconnectEnabled: this.reconnectEnabled,
         reconnectCount: this.reconnectCount,
-        recognizedCount: this.recognizedTexts.length,
-        hadInterim: !!this.lastInterimText,
+        recognizedCount: this.transcript.confirmedCount,
+        hadInterim: !!this.transcript.interimText,
       };
 
       // stop() 由来の canceled（正常終了）は情報ログのみ
@@ -292,7 +360,7 @@ export class TranscriptionSession {
       if (this.stopping) return;
       logWarn("transcription.sessionStopped", "session stopped unexpectedly mid-recording", {
         sessionId: e.sessionId,
-        recognizedCount: this.recognizedTexts.length,
+        recognizedCount: this.transcript.confirmedCount,
         reconnectCount: this.reconnectCount,
       });
     };
@@ -335,10 +403,9 @@ export class TranscriptionSession {
       errorDetails,
     });
 
-    if (this.lastInterimText) {
-      this.recognizedTexts.push(this.lastInterimText);
-      this.lastInterimText = "";
-      this.onInterimResult?.(this.recognizedTexts.join(""));
+    if (this.transcript.interimText) {
+      this.transcript.promoteInterim();
+      this.onInterimResult?.(this.transcript.confirmedText);
     }
 
     this.closeRecognizer();
@@ -368,18 +435,11 @@ export class TranscriptionSession {
   }
 
   getAudioLevel(): number {
-    if (!this.analyser) return 0;
-    const levelBuffer = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
-    this.analyser.getByteFrequencyData(levelBuffer);
-    let sum = 0;
-    for (const value of levelBuffer) sum += value;
-    const level = sum / levelBuffer.length / 255;
-    this.peakAudioLevel = Math.max(this.peakAudioLevel, level);
-    return level;
+    return this.audioMonitor?.getAudioLevel() ?? 0;
   }
 
   get wasSilent(): boolean {
-    return this.peakAudioLevel < TranscriptionSession.SILENCE_THRESHOLD;
+    return this.audioMonitor?.wasSilent ?? true;
   }
 
   /** analyser / audioContext を解放する。
@@ -387,11 +447,7 @@ export class TranscriptionSession {
    *  マイクの停止は RecordingJob の finally だけが行う。 */
   private releaseAudioResources(): void {
     this.mediaStream = null;
-    this.analyser = null;
-    if (this.audioContext) {
-      void this.audioContext.close().catch(() => {});
-      this.audioContext = null;
-    }
+    this.audioMonitor?.close();
   }
 
   async stop(signal?: AbortSignal): Promise<string> {
@@ -426,7 +482,7 @@ export class TranscriptionSession {
       this.releaseAudioResources();
 
       // stopContinuousRecognitionAsync と `recognized` イベント配信の間にはレースがあり、
-      // ユーザーが発話中にキーを離すと recognized が届かず recognizedTexts が空になる環境がある。
+      // ユーザーが発話中にキーを離すと確定イベントが届かず確定テキストが空になる環境がある。
       // その場合は最新の暫定テキストをフォールバックとして採用し、無言で録音を落とさない。
       // 最後の SDK イベントからの経過時間。大きい＝録音中にイベントが止まっていた（凍結）痕跡。
       const now = Date.now();
@@ -443,10 +499,10 @@ export class TranscriptionSession {
         disconnectCount: this.disconnectCount,
       };
 
-      const finalText = this.recognizedTexts.join("");
+      const finalText = this.transcript.confirmedText;
       if (finalText) {
         logInfo("transcription.stop", "azure-speech final text ready", {
-          recognizedCount: this.recognizedTexts.length,
+          recognizedCount: this.transcript.confirmedCount,
           finalLen: finalText.length,
           reconnectCount: this.reconnectCount,
           sinceLastEventMs,
@@ -454,18 +510,17 @@ export class TranscriptionSession {
         });
         return finalText;
       }
-      if (this.lastInterimText) {
+      if (this.transcript.interimText) {
         logWarn("transcription.stop", "azure-speech interim fallback used", {
-          interimLen: this.lastInterimText.length,
+          interimLen: this.transcript.interimText.length,
           reconnectCount: this.reconnectCount,
           sinceLastEventMs,
           ...conn,
         });
-        return this.lastInterimText;
+        return this.transcript.interimText;
       }
       // 確定・暫定ともに空。音声レベルの痕跡を残し、無音なのか認識喪失なのかを切り分ける。
       logWarn("transcription.stop", "azure-speech produced no text", {
-        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
         wasSilent: this.wasSilent,
         reconnectCount: this.reconnectCount,
         sinceLastEventMs,
@@ -489,7 +544,7 @@ export class TranscriptionSession {
 
     if (this.wasSilent) {
       logInfo("transcription.stop", "azure-openai silent, skipping upload", {
-        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+        peakAudioLevel: Number((this.audioMonitor?.peakLevel ?? 0).toFixed(3)),
       });
       return "";
     }
@@ -502,7 +557,7 @@ export class TranscriptionSession {
       // 無音ではないのに録音データが空。マイク供給停止などの異常なので WARN で残す。
       logWarn("transcription.stop", "azure-openai empty recording blob", {
         mimeType,
-        peakAudioLevel: Number(this.peakAudioLevel.toFixed(3)),
+        peakAudioLevel: Number((this.audioMonitor?.peakLevel ?? 0).toFixed(3)),
       });
       return "";
     }

@@ -9,3 +9,6 @@ export function formatError(err: unknown): string {
     return String(err);
   }
 }
+
+/** 利用者へそのまま表示してよい、秘密情報を含まないエラー。 */
+export class UserVisibleError extends Error {}
