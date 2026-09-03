@@ -189,7 +189,7 @@ Ctrl+Shift+Space 長押し
 | 後処理プロバイダー | Azure OpenAI | Azure OpenAI / OpenAI / Gemini |
 | 後処理エンドポイント | （空） | 後処理用の v1 エンドポイント URL（Azure 選択時のみ） |
 | 後処理 API Key | （空） | 後処理用 API キー（プロバイダーごとにローカル保存） |
-| 後処理モデル | Azure/OpenAI: `gpt-5.6-terra`<br>Gemini: `gemini-3.7-flash` | テキスト整形に使用するモデル（プロバイダーごとに保持） |
+| 後処理モデル | Azure/OpenAI: `gpt-5.6-terra`<br>Gemini: `gemini-3.8-flash` | テキスト整形に使用するモデル（プロバイダーごとに保持） |
 | Reasoning Effort | `low` | 後処理モデルの推論強度（none/low/medium/high）<br>Gemini 3 系は `none` 非対応 |
 | LangSmith API Key | （空） | LangSmith トレーシング用（任意） |
 | LangSmith Project | （空） | LangSmith のプロジェクト名（任意） |
