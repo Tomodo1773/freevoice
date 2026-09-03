@@ -33,13 +33,13 @@ FreeVoice は Windows 専用の音声入力ツール。`Ctrl+Shift+Space` を押
 pnpm tauri dev
 
 # プロダクションビルド
-pnpm tauri build
+sfw pnpm tauri build
 
 # フロントエンドのみビルド
-pnpm build
+sfw pnpm build
 
 # 型チェック
-pnpm tsc --noEmit
+sfw pnpm tsc --noEmit
 ```
 
 ## アーキテクチャ
