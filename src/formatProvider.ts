@@ -38,7 +38,7 @@ export const FORMAT_PROVIDERS: Record<FormatProvider, FormatProviderSpec> = {
     // Google AI Studio の OpenAI 互換エンドポイント
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     auth: "bearer",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     apiKeyPlaceholder: "AIza...",
     langsmithSystem: "gcp.gemini",
     reasoningNote: "Gemini 3 系のモデルは none に対応していません（最小でも minimal 相当の推論が入ります）。",
