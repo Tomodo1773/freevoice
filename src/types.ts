@@ -6,6 +6,13 @@ export type InputMethod = "clipboard" | "keystroke";
 
 export type TranscriptionProvider = "azure-openai" | "azure-speech" | "gemini-live";
 
+/** LangSmith へ送る gen_ai.system の値。FORMAT_PROVIDERS[].langsmithSystem と対になる。 */
+export const TRANSCRIPTION_LANGSMITH_SYSTEMS: Record<TranscriptionProvider, string> = {
+  "azure-openai": "azure.openai",
+  "azure-speech": "azure.speech",
+  "gemini-live": "gcp.gemini",
+};
+
 export type LangsmithRegion = "us" | "eu";
 
 export interface AppSettings {

@@ -82,8 +82,9 @@ function harness(overrides: Partial<RecorderDeps> = {}, settingsOverride = {}): 
     settings: { ...DEFAULT_SETTINGS, contextAwareFormatting: false, ...settingsOverride },
     apiKey: "key",
     formatApiKey: "fkey",
-    langsmithApiKey: "",
+    langsmith: null,
     effectiveDeviceId: "",
+    trace: null,
   };
 
   const deps: RecorderDeps = {

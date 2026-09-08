@@ -1,5 +1,6 @@
 import { formatError, UserVisibleError } from "./errors";
 import { logInfo, logWarn, logError } from "./diagLog";
+import type { LangsmithConfig, TraceSession } from "./langsmithTrace";
 import type { AppSettings } from "./types";
 
 /**
@@ -17,8 +18,11 @@ export interface RecordingConfig {
   settings: AppSettings;
   apiKey: string;
   formatApiKey: string;
-  langsmithApiKey: string;
+  /** LangSmith 送信設定。無効時は null。トレースと話題蒸留の両方がこれを使う。 */
+  langsmith: LangsmithConfig | null;
   effectiveDeviceId: string;
+  /** 録音1回ぶんのトレース。LangSmith 無効時は null。ジョブと寿命を共にする。 */
+  trace: TraceSession | null;
 }
 
 /** 話題コンテキストのスコープに使う、録音開始時のフォアグラウンドウィンドウ。 */
