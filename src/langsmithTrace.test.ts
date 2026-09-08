@@ -114,7 +114,7 @@ describe("TraceSession", () => {
     const trace = new TraceSession(config, 0);
     trace.addLlmSpan({ ...base, spanName: "transcribe" });
     trace.addLlmSpan(base);
-    await trace.flush(100);
+    await trace.flush({ endTimeMs: 100, input: "TR", output: "OUT" });
 
     const spans = flushedSpans();
     expect(spans.map((s) => s.name)).toEqual(["recording", "transcribe", "format"]);
@@ -128,21 +128,26 @@ describe("TraceSession", () => {
     expect(new Set(children.map((s) => s.spanId)).size).toBe(children.length);
   });
 
-  it("root スパンは chain 種別で gen_ai.* を持たない", async () => {
+  it("root スパンは chain 種別で、gen_ai.* を持たず入出力だけを載せる", async () => {
     const trace = new TraceSession(config, 0);
     trace.addLlmSpan(base);
-    await trace.flush(100);
+    await trace.flush({ endTimeMs: 100, input: "TR", output: "OUT" });
 
     const root = flushedSpans()[0];
     expect(findStr(root, "langsmith.span.kind")).toBe("chain");
     expect(root.attributes.some((a) => a.key.startsWith("gen_ai."))).toBe(false);
+    expect(findStr(root, "input.value")).toBe("TR");
+    expect(findStr(root, "output.value")).toBe("OUT");
   });
 
-  it("includeContent=false の設定はスパンにも反映される", async () => {
+  it("includeContent=false では root の入出力も子のプロンプトも含めない", async () => {
     const trace = new TraceSession({ ...config, includeContent: false }, 0);
     trace.addLlmSpan(base);
-    await trace.flush(100);
+    await trace.flush({ endTimeMs: 100, input: "TR", output: "OUT" });
 
-    expect(findStr(flushedSpans()[1], "gen_ai.prompt.0.content")).toBeUndefined();
+    const [root, child] = flushedSpans();
+    expect(findStr(root, "input.value")).toBeUndefined();
+    expect(findStr(root, "output.value")).toBeUndefined();
+    expect(findStr(child, "gen_ai.prompt.0.content")).toBeUndefined();
   });
 });

@@ -153,14 +153,21 @@ export function buildSpan(
   };
 }
 
-/** 録音1回ぶんを束ねる親スパン。LLM 呼び出しではないので gen_ai.* は持たない。 */
+/** 録音1回ぶんを束ねる親スパン。LLM 呼び出しではないので gen_ai.* は持たず、
+ *  トレース一覧に出る入出力（文字起こし生テキストと貼り付けたテキスト）だけを載せる。 */
 export function buildRootSpan(args: {
   traceId: string;
   spanId: string;
   name: string;
   startTimeMs: number;
   endTimeMs: number;
+  input?: string;
+  output?: string;
 }): object {
+  const attributes = [strAttr("langsmith.span.kind", "chain")];
+  if (args.input != null) attributes.push(strAttr("input.value", args.input));
+  if (args.output != null) attributes.push(strAttr("output.value", args.output));
+
   return {
     traceId: args.traceId,
     spanId: args.spanId,
@@ -168,7 +175,7 @@ export function buildRootSpan(args: {
     kind: 1, // SPAN_KIND_INTERNAL
     startTimeUnixNano: msToUnixNano(args.startTimeMs),
     endTimeUnixNano: msToUnixNano(args.endTimeMs),
-    attributes: [strAttr("langsmith.span.kind", "chain")],
+    attributes,
     status: { code: 1 },
     events: [],
   };
@@ -234,13 +241,15 @@ export class TraceSession {
     );
   }
 
-  async flush(endTimeMs: number): Promise<void> {
+  /** input は文字起こしの生テキスト、output は実際に貼り付けたテキスト。 */
+  async flush(args: { endTimeMs: number; input: string; output: string }): Promise<void> {
     const root = buildRootSpan({
       traceId: this.traceId,
       spanId: this.rootSpanId,
       name: "recording",
       startTimeMs: this.startTimeMs,
-      endTimeMs,
+      endTimeMs: args.endTimeMs,
+      ...(this.config.includeContent ? { input: args.input, output: args.output } : {}),
     });
     await postTrace(this.config, buildTracePayload(this.config.project, [root, ...this.spans]));
   }

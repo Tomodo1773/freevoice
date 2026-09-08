@@ -228,7 +228,7 @@ async function formatText(
       endTimeMs: formatEndMs,
       error: fallback ? { message: fallbackReason ?? "format fallback", status: errorStatus } : undefined,
     });
-    void config.trace.flush(Date.now());
+    void config.trace.flush({ endTimeMs: Date.now(), input: raw, output: text });
   }
 
   return { text, fallback, fallbackReason: fallbackReason ?? "" };
