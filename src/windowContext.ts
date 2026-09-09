@@ -1,6 +1,6 @@
 import { buildFormatRequest, ChatMessage, PostprocessError, PostprocessUsage, requestChatCompletion } from "./postprocess";
 import { LangsmithConfig, sendLlmSpan } from "./langsmithTrace";
-import { FormatProvider } from "./formatProvider";
+import { FORMAT_PROVIDERS, FormatProvider } from "./formatProvider";
 import { ReasoningEffort } from "./types";
 import { logInfo, logWarn } from "./diagLog";
 
@@ -161,7 +161,7 @@ export async function refreshContext(
         region: langsmith.region,
         project: langsmith.project,
         apiKey: langsmith.apiKey,
-        provider: config.formatProvider,
+        system: FORMAT_PROVIDERS[config.formatProvider].langsmithSystem,
         requestModel: config.model,
         responseModel: result?.model,
         messages: result?.messages ?? buildDistillMessages(prev, formatted),

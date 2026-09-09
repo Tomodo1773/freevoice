@@ -6,7 +6,8 @@ import { TranscriptionSession } from "./transcription";
 import { GeminiLiveSession } from "./geminiLive";
 import { postprocessWithRetry, warmupFormatConnection } from "./postprocess";
 import { getContext, refreshContext } from "./windowContext";
-import { sendLlmSpan } from "./langsmithTrace";
+import { TraceSession, type LangsmithConfig } from "./langsmithTrace";
+import { FORMAT_PROVIDERS } from "./formatProvider";
 import { loadSettings, persistSettings } from "./useSettings";
 import {
   getAllApiKeys,
@@ -25,7 +26,7 @@ import {
   type LogData,
 } from "./recorder";
 import { logInfo, logWarn, logError, setLogPhaseSource } from "./diagLog";
-import type { AppSettings } from "./types";
+import { TRANSCRIPTION_LANGSMITH_SYSTEMS, type AppSettings } from "./types";
 
 function playStartBeep(): void {
   const ctx = new AudioContext();
@@ -72,7 +73,17 @@ async function loadConfig(): Promise<RecordingConfig> {
   const formatApiKey = formatApiKeys[initial.formatProvider];
   warmupFormatConnection(initial.formatProvider, initial.formatEndpoint);
   const { effectiveDeviceId, settings } = await validateAudioDevice(initial);
-  return { settings, apiKey, formatApiKey, langsmithApiKey, effectiveDeviceId };
+  const langsmith: LangsmithConfig | null = settings.langsmithEnabled
+    ? {
+        region: settings.langsmithRegion,
+        project: settings.langsmithProject,
+        apiKey: langsmithApiKey,
+        includeContent: settings.langsmithIncludeContent,
+      }
+    : null;
+  // 録音1回 = 1トレース。ジョブごとに1度だけ呼ばれるこの関数がトレースの起点になる。
+  const trace = langsmith ? new TraceSession(langsmith, Date.now()) : null;
+  return { settings, apiKey, formatApiKey, langsmith, effectiveDeviceId, trace };
 }
 
 async function resolveWindow(): Promise<RecordingWindow | null> {
@@ -92,6 +103,48 @@ async function acquireMic(config: RecordingConfig): Promise<MediaStream> {
   });
 }
 
+/** 文字起こしプロバイダーのモデル名。Azure Speech はモデル指定の概念を持たない。 */
+function transcriptionModelOf(s: AppSettings): string | undefined {
+  if (s.transcriptionProvider === "gemini-live") return s.geminiTranscriptionModel;
+  if (s.transcriptionProvider === "azure-openai") return s.transcriptionModel;
+  return undefined;
+}
+
+/** 停止時の確定テキストをトレースへ残す薄いラッパー。音声入力は LangChain の
+ *  voice-agents-tracing に倣い、ダミーの user メッセージで表す。 */
+function withTranscriptionTrace(
+  pending: PendingSession,
+  config: RecordingConfig
+): PendingSession {
+  const trace = config.trace;
+  if (!trace) return pending;
+
+  const { session } = pending;
+  const startTimeMs = Date.now();
+  return {
+    ready: pending.ready,
+    session: {
+      getAudioLevel: () => session.getAudioLevel(),
+      get wasSilent() {
+        return session.wasSilent;
+      },
+      stop: async (signal) => {
+        const text = await session.stop(signal);
+        trace.addLlmSpan({
+          spanName: "transcribe",
+          system: TRANSCRIPTION_LANGSMITH_SYSTEMS[config.settings.transcriptionProvider],
+          requestModel: transcriptionModelOf(config.settings),
+          messages: [{ role: "user", content: "audio_segment" }],
+          completion: text,
+          startTimeMs,
+          endTimeMs: Date.now(),
+        });
+        return text;
+      },
+    },
+  };
+}
+
 function createTranscriptionSession(
   mic: MediaStream,
   config: RecordingConfig,
@@ -109,7 +162,7 @@ function createTranscriptionSession(
       onRecognitionError: callbacks.onError,
       onStopRequested: callbacks.onStopRequested,
     });
-    return { session, ready };
+    return withTranscriptionTrace({ session, ready }, config);
   }
 
   const session = new TranscriptionSession();
@@ -124,7 +177,7 @@ function createTranscriptionSession(
     onInterimResult: callbacks.onInterim,
     onRecognitionError: callbacks.onError,
   });
-  return { session, ready };
+  return withTranscriptionTrace({ session, ready }, config);
 }
 
 function formatModelOf(s: AppSettings): string {
@@ -161,14 +214,10 @@ async function formatText(
   );
   const formatEndMs = Date.now();
 
-  if (s.langsmithEnabled) {
-    void sendLlmSpan({
+  if (config.trace) {
+    config.trace.addLlmSpan({
       spanName: "format",
-      region: s.langsmithRegion,
-      project: s.langsmithProject,
-      apiKey: config.langsmithApiKey,
-      includeContent: s.langsmithIncludeContent,
-      provider: s.formatProvider,
+      system: FORMAT_PROVIDERS[s.formatProvider].langsmithSystem,
       requestModel: formatModel,
       responseModel,
       messages,
@@ -179,6 +228,7 @@ async function formatText(
       endTimeMs: formatEndMs,
       error: fallback ? { message: fallbackReason ?? "format fallback", status: errorStatus } : undefined,
     });
+    void config.trace.flush({ endTimeMs: Date.now(), input: raw, output: text });
   }
 
   return { text, fallback, fallbackReason: fallbackReason ?? "" };
@@ -186,14 +236,6 @@ async function formatText(
 
 function refreshTopic(win: RecordingWindow, formatted: string, config: RecordingConfig): void {
   const s = config.settings;
-  const langsmithConfig = s.langsmithEnabled
-    ? {
-        region: s.langsmithRegion,
-        project: s.langsmithProject,
-        apiKey: config.langsmithApiKey,
-        includeContent: s.langsmithIncludeContent,
-      }
-    : undefined;
   void refreshContext(
     win.id,
     win.exe,
@@ -206,7 +248,7 @@ function refreshTopic(win: RecordingWindow, formatted: string, config: Recording
       model: formatModelOf(s),
       reasoningEffort: s.reasoningEffort,
     },
-    langsmithConfig
+    config.langsmith ?? undefined
   );
 }
 
